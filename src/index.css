@@ -1,68 +1,198 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
-
-body {
+/* Basic resets and making sure html/body take full height */
+html, body, #root {
+  height: 100%;
   margin: 0;
+  padding: 0;
+  font-family: sans-serif; /* A simple, common font */
+  box-sizing: border-box; /* Include padding and border in the element's total width and height */
+}
+
+/* Flexbox for centering the main content */
+body {
   display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+  justify-content: center; /* Center horizontally */
+  align-items: center;    /* Center vertically */
+  min-height: 100vh;      /* Ensure body takes full viewport height */
+  background-color: #f4f7f6; /* A very light, subtle background color */
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* Basic styling for form elements for better appearance */
+input[type="text"],
+textarea,
+.form-select { /* Added .form-select here */
+  border: 1px solid #ccc;
+  padding: 10px;
+  border-radius: 4px;
+  font-size: 16px;
+  width: 100%; /* Make inputs take full width of their container */
+  box-sizing: border-box; /* Ensures padding doesn't push width outside container */
+  transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  background-color: #fff; /* Ensure white background for inputs/selects */
 }
 
+input[type="text"]:focus,
+textarea:focus,
+.form-select:focus { /* Added .form-select here */
+  border-color: #007bff; /* Highlight border on focus */
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25); /* Subtle glow on focus */
+  outline: none; /* Remove default browser outline */
+}
+
+/* Style for error messages */
+.error-message {
+  color: #dc3545; /* Red color for errors */
+  font-size: 0.875em; /* Smaller font size */
+  margin-top: 0.25em;
+}
+
+/* Styling for buttons */
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
+  background-color: #007bff;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
   cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  transition: background-color 0.2s ease-in-out, opacity 0.2s ease-in-out;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+button:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Styling for file input button (if we kept the default input visible) */
+/* input[type="file"]::file-selector-button { */
+/* background-color: #e9ecef; */
+/* color: #343a40; */
+/* padding: 8px 16px; */
+/* border: 1px solid #ced4da; */
+/* border-radius: 4px; */
+/* cursor: pointer; */
+/* transition: background-color 0.2s ease-in-out; */
+/* } */
+
+/* input[type="file"]::file-selector-button:hover { */
+/* background-color: #dee2e6; */
+/* } */
+
+/* --- New Styles for App.tsx and UploadForm.tsx --- */
+
+.app-container {
+  padding: 2rem;
+  max-width: 900px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.app-title {
+  font-size: 2.5em;
+  font-weight: bold;
+  color: #007bff;
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.upload-form-container {
+  background-color: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.form-group {
+  margin-bottom: 1.5rem; /* Slightly more space between groups */
+}
+
+.form-label {
+  display: block;
+  color: #495057;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.form-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1.5rem;
+}
+
+.upload-message {
+  margin-left: 1rem;
+  font-weight: 500;
+}
+
+.upload-message.error {
+  color: #dc3545;
+}
+
+.upload-message.success {
+  color: #28a745;
+}
+
+/* --- Drag and Drop Area Styles --- */
+.file-drop-area {
+  border: 2px dashed #a0a0a0;
+  border-radius: 8px;
+  padding: 2rem;
+  text-align: center;
+  color: #6c757d;
+  transition: border-color 0.2s ease-in-out, background-color 0.2s ease-in-out;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 150px; /* Give it some height */
+}
+
+.file-drop-area.dragging {
+  border-color: #007bff; /* Highlight border when dragging over */
+  background-color: #e6f7ff; /* Light blue background when dragging over */
+}
+
+.file-drop-area.has-error {
+  border-color: #dc3545; /* Red border for validation error */
+}
+
+.file-drop-area p {
+  margin: 0.5rem 0;
+}
+
+.choose-file-button {
+  background-color: #6c757d; /* A more neutral button for choosing file */
+  color: white;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.choose-file-button:hover {
+  background-color: #5a6268;
+}
+
+.selected-file-info {
+  margin-top: 1rem;
+  font-weight: bold;
+  color: #343a40;
+}
+
+/* Style for select element */
+.form-select {
+  /* Inherits general input styles from above */
+  appearance: none; /* Remove default arrow on some browsers */
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e"); /* Custom arrow */
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1em 1em;
+  padding-right: 2.5rem; /* Make space for the arrow */
 }
