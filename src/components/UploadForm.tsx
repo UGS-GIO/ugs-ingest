@@ -24,7 +24,7 @@ interface FormErrors {
 // Options for Publication Type dropdown
 const publicationTypeOptions = [
   { value: '', label: 'Select Publication Type' },
-  { value: 'journal-article', label: 'Journal Article' },
+  { value: 'Special Study', label: 'Special Study' },
   { value: 'Digital Map', label: 'Digital Map' },
   { value: 'Open File', label: 'Open File Report' },
   { value: 'report', label: 'Technical Report' },
@@ -180,7 +180,7 @@ export const UploadForm: React.FC = () => {
           value={formData.projectName}
           onChange={handleChange}
           style={{ borderColor: errors.projectName ? '#dc3545' : '' }}
-          placeholder="e.g., Arctic Sea Ice Study"
+          placeholder=""
         />
         {errors.projectName && <p className="error-message">{errors.projectName}</p>}
       </div>
@@ -197,7 +197,7 @@ export const UploadForm: React.FC = () => {
           value={formData.datasetName}
           onChange={handleChange}
           style={{ borderColor: errors.datasetName ? '#dc3545' : '' }}
-          placeholder="e.g., 2024 Melt Season Imagery"
+          placeholder=""
         />
         {errors.datasetName && <p className="error-message">{errors.datasetName}</p>}
       </div>
@@ -214,7 +214,7 @@ export const UploadForm: React.FC = () => {
           value={formData.authorName}
           onChange={handleChange}
           style={{ borderColor: errors.authorName ? '#dc3545' : '' }}
-          placeholder="e.g., Dr. Jane Doe"
+          placeholder=""
         />
         {errors.authorName && <p className="error-message">{errors.authorName}</p>}
       </div>
@@ -252,7 +252,7 @@ export const UploadForm: React.FC = () => {
           value={formData.description}
           onChange={handleChange}
           rows={3}
-          placeholder="A brief description of the dataset..."
+          placeholder=""
         ></textarea>
       </div>
 

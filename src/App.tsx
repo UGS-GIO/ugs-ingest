@@ -1,13 +1,14 @@
 import React from 'react';
-import { UploadForm } from './components/UploadForm';
+import { Outlet } from '@tanstack/react-router'; // Import Outlet
 
 function App() {
   return (
-    <div className="app-container"> {/* Add a class for potential specific container styling */}
+    <div className="app-container">
       <h1 className="app-title">
         UGS Data Ingestion Portal
       </h1>
-      <UploadForm />
+      {/* Outlet renders the currently matched route's component */}
+      <Outlet />
     </div>
   );
 }
