@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import type { ChangeEvent, FormEvent, DragEvent } from 'react'; // Added DragEvent type
+import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 
 // Define the shape of our form data
 interface FormData {
   projectName: string;
   datasetName: string;
-  authorName: string; // Renamed from scientistName
-  publicationType: string; // New field
+  authorName: string;
+  publicationType: string;
   description: string;
   selectedFile: File | null;
 }
@@ -15,8 +15,8 @@ interface FormData {
 interface FormErrors {
   projectName?: string;
   datasetName?: string;
-  authorName?: string; // Renamed from scientistName
-  publicationType?: string; // New field
+  authorName?: string;
+  publicationType?: string;
   description?: string;
   selectedFile?: string;
 }
@@ -37,8 +37,8 @@ export const UploadForm: React.FC = () => {
   const [formData, setFormData] = useState<FormData>({
     projectName: '',
     datasetName: '',
-    authorName: '', // Initialize new name
-    publicationType: '', // Initialize new field
+    authorName: '',
+    publicationType: '',
     description: '',
     selectedFile: null,
   });
@@ -47,10 +47,10 @@ export const UploadForm: React.FC = () => {
   const [errors, setErrors] = useState<FormErrors>({});
   const [uploadMessage, setUploadMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [isDragging, setIsDragging] = useState<boolean>(false); // New state for drag-and-drop UI
+  const [isDragging, setIsDragging] = useState<boolean>(false);
 
   // Handle changes for text and select inputs
-  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => { // Added HTMLSelectElement
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prevData) => ({
       ...prevData,
@@ -71,9 +71,6 @@ export const UploadForm: React.FC = () => {
     if (errors.selectedFile) {
       setErrors((prevErrors) => ({ ...prevErrors, selectedFile: undefined }));
     }
-    // Also reset the file input field if a new file is set via drag-drop
-    // This is a bit tricky with controlled components; often best to let React manage if possible.
-    // For direct file input, clearing it after selection might be desirable if you want to allow re-selection.
   };
 
   // Handler for direct file input change
@@ -87,7 +84,7 @@ export const UploadForm: React.FC = () => {
 
   // Drag and Drop Handlers
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault(); // Prevent default to allow drop
+    e.preventDefault();
     setIsDragging(true);
   };
 
@@ -101,19 +98,18 @@ export const UploadForm: React.FC = () => {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleFile(e.dataTransfer.files[0]);
-      e.dataTransfer.clearData(); // Clear data after successful drop
+      e.dataTransfer.clearData();
     }
   };
-
 
   // Basic form validation
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
     if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
     if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
-    if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.'; // Updated field
-    if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.'; // New field validation
-    if (!formData.selectedFile) newErrors.selectedFile = 'Please select or drop a file to upload.'; // Updated message
+    if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
+    if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
+    if (!formData.selectedFile) newErrors.selectedFile = 'Please select or drop a file to upload.';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -165,145 +161,162 @@ export const UploadForm: React.FC = () => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="upload-form-container">
-      <h2 style={{ fontSize: '2em', fontWeight: 'bold', color: '#007bff', marginBottom: '1.5rem' }}>Upload Dataset</h2>
+    <div className="max-w-4xl mx-auto p-8 bg-white rounded-lg shadow-lg">
+      <form onSubmit={handleSubmit}>
+        <h2 className="text-3xl font-bold text-blue-600 mb-6 text-center">Upload Dataset</h2>
 
-      {/* Project Name */}
-      <div className="form-group">
-        <label htmlFor="projectName" className="form-label">
-          Project Name:
-        </label>
-        <input
-          type="text"
-          id="projectName"
-          name="projectName"
-          value={formData.projectName}
-          onChange={handleChange}
-          style={{ borderColor: errors.projectName ? '#dc3545' : '' }}
-          placeholder=""
-        />
-        {errors.projectName && <p className="error-message">{errors.projectName}</p>}
-      </div>
-
-      {/* Dataset Name */}
-      <div className="form-group">
-        <label htmlFor="datasetName" className="form-label">
-          Dataset Name:
-        </label>
-        <input
-          type="text"
-          id="datasetName"
-          name="datasetName"
-          value={formData.datasetName}
-          onChange={handleChange}
-          style={{ borderColor: errors.datasetName ? '#dc3545' : '' }}
-          placeholder=""
-        />
-        {errors.datasetName && <p className="error-message">{errors.datasetName}</p>}
-      </div>
-
-      {/* Author Name (formerly Scientist Name) */}
-      <div className="form-group">
-        <label htmlFor="authorName" className="form-label">
-          Author Name:
-        </label>
-        <input
-          type="text"
-          id="authorName"
-          name="authorName" // Updated name
-          value={formData.authorName}
-          onChange={handleChange}
-          style={{ borderColor: errors.authorName ? '#dc3545' : '' }}
-          placeholder=""
-        />
-        {errors.authorName && <p className="error-message">{errors.authorName}</p>}
-      </div>
-
-      {/* Publication Type (New Field) */}
-      <div className="form-group">
-        <label htmlFor="publicationType" className="form-label">
-          Publication Type:
-        </label>
-        <select
-          id="publicationType"
-          name="publicationType"
-          value={formData.publicationType}
-          onChange={handleChange}
-          className="form-select" // New class for select styling
-          style={{ borderColor: errors.publicationType ? '#dc3545' : '' }}
-        >
-          {publicationTypeOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        {errors.publicationType && <p className="error-message">{errors.publicationType}</p>}
-      </div>
-
-      {/* Description */}
-      <div className="form-group">
-        <label htmlFor="description" className="form-label">
-          Description (Optional):
-        </label>
-        <textarea
-          id="description"
-          name="description"
-          value={formData.description}
-          onChange={handleChange}
-          rows={3}
-          placeholder=""
-        ></textarea>
-      </div>
-
-      {/* File Upload (with Drag & Drop) */}
-      <div className="form-group">
-        <label htmlFor="file-input" className="form-label">
-          Select Data File:
-        </label>
-        <div
-          className={`file-drop-area ${isDragging ? 'dragging' : ''} ${
-            errors.selectedFile ? 'has-error' : ''
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
+        {/* Project Name */}
+        <div className="mb-6">
+          <label htmlFor="projectName" className="block text-gray-700 font-semibold mb-2">
+            Project Name:
+          </label>
           <input
-            type="file"
-            id="file-input"
-            onChange={handleFileChange}
-            style={{ display: 'none' }} // Hide the default file input visually
+            type="text"
+            id="projectName"
+            name="projectName"
+            value={formData.projectName}
+            onChange={handleChange}
+            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+              errors.projectName ? 'border-red-500' : 'border-gray-300'
+            }`}
+            placeholder=""
           />
-          <p>Drag & drop your file here, or</p>
-          <button
-            type="button" // Important: type="button" to prevent form submission
-            onClick={() => document.getElementById('file-input')?.click()}
-            className="choose-file-button" // New class for button styling
+          {errors.projectName && <p className="text-red-500 text-sm mt-1">{errors.projectName}</p>}
+        </div>
+
+        {/* Dataset Name */}
+        <div className="mb-6">
+          <label htmlFor="datasetName" className="block text-gray-700 font-semibold mb-2">
+            Dataset Name:
+          </label>
+          <input
+            type="text"
+            id="datasetName"
+            name="datasetName"
+            value={formData.datasetName}
+            onChange={handleChange}
+            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+              errors.datasetName ? 'border-red-500' : 'border-gray-300'
+            }`}
+            placeholder=""
+          />
+          {errors.datasetName && <p className="text-red-500 text-sm mt-1">{errors.datasetName}</p>}
+        </div>
+
+        {/* Author Name */}
+        <div className="mb-6">
+          <label htmlFor="authorName" className="block text-gray-700 font-semibold mb-2">
+            Author Name:
+          </label>
+          <input
+            type="text"
+            id="authorName"
+            name="authorName"
+            value={formData.authorName}
+            onChange={handleChange}
+            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+              errors.authorName ? 'border-red-500' : 'border-gray-300'
+            }`}
+            placeholder=""
+          />
+          {errors.authorName && <p className="text-red-500 text-sm mt-1">{errors.authorName}</p>}
+        </div>
+
+        {/* Publication Type */}
+        <div className="mb-6">
+          <label htmlFor="publicationType" className="block text-gray-700 font-semibold mb-2">
+            Publication Type:
+          </label>
+          <select
+            id="publicationType"
+            name="publicationType"
+            value={formData.publicationType}
+            onChange={handleChange}
+            className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
+              errors.publicationType ? 'border-red-500' : 'border-gray-300'
+            }`}
           >
-            Choose File
+            {publicationTypeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {errors.publicationType && <p className="text-red-500 text-sm mt-1">{errors.publicationType}</p>}
+        </div>
+
+        {/* Description */}
+        <div className="mb-6">
+          <label htmlFor="description" className="block text-gray-700 font-semibold mb-2">
+            Description (Optional):
+          </label>
+          <textarea
+            id="description"
+            name="description"
+            value={formData.description}
+            onChange={handleChange}
+            rows={3}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 resize-vertical"
+            placeholder=""
+          />
+        </div>
+
+        {/* File Upload with Drag & Drop */}
+        <div className="mb-6">
+          <label htmlFor="file-input" className="block text-gray-700 font-semibold mb-2">
+            Select Data File:
+          </label>
+          <div
+            className={`border-2 border-dashed rounded-lg p-8 text-center text-gray-500 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center min-h-[150px] ${
+              isDragging 
+                ? 'border-blue-500 bg-blue-50' 
+                : errors.selectedFile 
+                  ? 'border-red-500' 
+                  : 'border-gray-400'
+            }`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <input
+              type="file"
+              id="file-input"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <p className="mb-2">Drag & drop your file here, or</p>
+            <button
+              type="button"
+              onClick={() => document.getElementById('file-input')?.click()}
+              className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
+            >
+              Choose File
+            </button>
+            {formData.selectedFile && (
+              <p className="mt-4 font-bold text-gray-800">Selected: {formData.selectedFile.name}</p>
+            )}
+          </div>
+          {errors.selectedFile && <p className="text-red-500 text-sm mt-1">{errors.selectedFile}</p>}
+        </div>
+
+        {/* Submission Button */}
+        <div className="flex items-center justify-between mt-6">
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 text-base"
+          >
+            {isSubmitting ? 'Uploading...' : 'Upload Data'}
           </button>
-          {formData.selectedFile && (
-            <p className="selected-file-info">Selected: {formData.selectedFile.name}</p>
+          {uploadMessage && (
+            <p className={`ml-4 font-medium ${
+              uploadMessage.includes('error') ? 'text-red-500' : 'text-green-600'
+            }`}>
+              {uploadMessage}
+            </p>
           )}
         </div>
-        {errors.selectedFile && <p className="error-message">{errors.selectedFile}</p>}
-      </div>
-
-      {/* Submission Button */}
-      <div className="form-submit-row">
-        <button
-          type="submit"
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? 'Uploading...' : 'Upload Data'}
-        </button>
-        {uploadMessage && (
-          <p className={`upload-message ${uploadMessage.includes('error') ? 'error' : 'success'}`}>
-            {uploadMessage}
-          </p>
-        )}
-      </div>
-    </form>
+      </form>
+    </div>
   );
 };
