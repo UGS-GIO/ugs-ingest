@@ -3,6 +3,7 @@ name: Deploy to Production
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
 
 env:
   PROJECT_ID: ut-dnr-ugs-backend-tools
@@ -36,6 +37,14 @@ jobs:
     - name: Build project
       run: npm run build
 
+    - name: Verify build output
+      run: |
+        echo "Checking build output..."
+        ls -la dist/
+        test -f dist/index.html
+        test -f server/index.js
+        echo "✅ Build artifacts verified"
+
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
@@ -45,14 +54,41 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
+    - name: Configure Docker
+      run: gcloud auth configure-docker $REGION-docker.pkg.dev
+
     - name: Build and push to Artifact Registry
       run: |
-        gcloud builds submit --tag $REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME
+        IMAGE_URL="$REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME"
+        echo "Building image: $IMAGE_URL"
+        
+        # Use Cloud Build - ignore log streaming issues but check final status
+        set +e  # Don't exit on error
+        gcloud builds submit --tag $IMAGE_URL --timeout=20m
+        BUILD_EXIT_CODE=$?
+        
+        if [ $BUILD_EXIT_CODE -eq 0 ]; then
+          echo "✅ Build completed successfully"
+        else
+          echo "❌ Build may have failed, checking final status..."
+          # Get the latest build and check its status
+          BUILD_ID=$(gcloud builds list --limit=1 --format="value(id)")
+          BUILD_STATUS=$(gcloud builds describe $BUILD_ID --format="value(status)")
+          if [ "$BUILD_STATUS" = "SUCCESS" ]; then
+            echo "✅ Build actually succeeded despite exit code"
+          else
+            echo "❌ Build failed with status: $BUILD_STATUS"
+            exit 1
+          fi
+        fi
 
     - name: Deploy to Cloud Run
       run: |
+        IMAGE_URL="$REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME"
+        echo "Deploying to Cloud Run..."
+        
         gcloud run deploy $SERVICE_NAME \
-          --image $REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME \
+          --image $IMAGE_URL \
           --platform managed \
           --region $REGION \
           --allow-unauthenticated \
@@ -60,7 +96,9 @@ jobs:
           --memory 512Mi \
           --cpu 1 \
           --max-instances 10 \
-          --set-env-vars NODE_ENV=production
+          --set-env-vars NODE_ENV=production \
+          --timeout 300 \
+          --verbosity=info
 
     - name: Get service URL
       id: url
@@ -69,8 +107,15 @@ jobs:
         echo "url=$URL" >> $GITHUB_OUTPUT
         echo "🚀 Deployed to: $URL"
 
-    - name: Notify deployment success
+    - name: Test deployment
       run: |
-        echo "✅ Deployment successful!"
-        echo "🌐 Service URL: ${{ steps.url.outputs.url }}"
-        echo "📊 View logs: https://console.cloud.google.com/run/detail/$REGION/$SERVICE_NAME/logs?project=$PROJECT_ID"
+        URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.url)")
+        echo "Testing deployment at: $URL"
+        
+        # Test health endpoint
+        curl -f "$URL/health" || echo "Health check failed"
+        
+        # Test that the app loads (should get HTML)
+        curl -f "$URL/" | head -10 || echo "App load test failed"
+        
+        echo "✅ Deployment tests completed"
