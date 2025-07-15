@@ -1,0 +1,76 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  PROJECT_ID: ut-dnr-ugs-backend-tools
+  SERVICE_NAME: ugs-ingest-app
+  REGION: us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run linting
+      run: npm run lint
+
+    - name: Build project
+      run: npm run build
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+        service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Build and push to Artifact Registry
+      run: |
+        gcloud builds submit --tag $REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy $SERVICE_NAME \
+          --image $REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME \
+          --platform managed \
+          --region $REGION \
+          --allow-unauthenticated \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --max-instances 10 \
+          --set-env-vars NODE_ENV=production
+
+    - name: Get service URL
+      id: url
+      run: |
+        URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.url)")
+        echo "url=$URL" >> $GITHUB_OUTPUT
+        echo "🚀 Deployed to: $URL"
+
+    - name: Notify deployment success
+      run: |
+        echo "✅ Deployment successful!"
+        echo "🌐 Service URL: ${{ steps.url.outputs.url }}"
+        echo "📊 View logs: https://console.cloud.google.com/run/detail/$REGION/$SERVICE_NAME/logs?project=$PROJECT_ID"
