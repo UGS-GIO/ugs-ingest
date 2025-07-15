@@ -7,7 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node server/index.js",
+    "docker:build": "docker build -t ugs-ingest .",
+    "docker:run": "docker run -p 8080:8080 ugs-ingest",
+    "deploy:build": "gcloud builds submit --tag us-central1-docker.pkg.dev/ut-dnr-ugs-backend-tools/containers/ugs-ingest-app",
+    "deploy:run": "gcloud run deploy ugs-ingest-app --image us-central1-docker.pkg.dev/ut-dnr-ugs-backend-tools/containers/ugs-ingest-app --platform managed --region us-central1 --allow-unauthenticated --port 8080",
+    "deploy": "npm run deploy:build && npm run deploy:run"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.8",
@@ -15,6 +21,7 @@
     "@tanstack/router-vite-plugin": "^1.120.15",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "express": "^4.18.2",
     "lucide-react": "^0.513.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
