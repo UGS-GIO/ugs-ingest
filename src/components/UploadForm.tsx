@@ -1,18 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
 
 // Define the shape of our form data
 interface FormData {
+  // Original fields
   projectName: string;
   datasetName: string;
   authorName: string;
   publicationType: string;
   description: string;
   selectedFile: File | null;
+  
+  // New fields for zip naming convention
+  domain: string;
+  customDomain: string;
+  dataTopic: string;
+  scale: string;
+  quadName: string;
+  pubId: string;
+  loadType: string;
 }
 
-// Define the shape of our errors (all properties are optional strings)
+// Define the shape of our errors
 interface FormErrors {
   projectName?: string;
   datasetName?: string;
@@ -20,6 +30,13 @@ interface FormErrors {
   publicationType?: string;
   description?: string;
   selectedFile?: string;
+  domain?: string;
+  customDomain?: string;
+  dataTopic?: string;
+  scale?: string;
+  quadName?: string;
+  pubId?: string;
+  loadType?: string;
 }
 
 // Options for Publication Type dropdown
@@ -33,17 +50,47 @@ const publicationTypeOptions = [
   { value: 'other', label: 'Other' },
 ];
 
+// Domain options
+const domainOptions = [
+  { value: '', label: 'Select Domain' },
+  { value: 'hazards', label: 'Hazards' },
+  { value: 'groundwater', label: 'Groundwater' },
+  { value: 'wetlands', label: 'Wetlands' },
+  { value: 'geologic_maps', label: 'Geologic Maps' },
+  { value: 'energy_minerals', label: 'Energy & Minerals' },
+  { value: 'ccus', label: 'CCUS' },
+  { value: 'custom', label: 'Other (specify)' },
+];
+
+// Load type options
+const loadTypeOptions = [
+  { value: '', label: 'Select Load Type' },
+  { value: 'full', label: 'Full' },
+  { value: 'update', label: 'Update' },
+  { value: 'append', label: 'Append' },
+  { value: 'incremental', label: 'Incremental' },
+];
+
 export const UploadForm: React.FC = () => {
   const { email, authenticated, loading, error } = useIAPUser();
 
   // State to hold all form data
   const [formData, setFormData] = useState<FormData>({
+    // Original fields
     projectName: '',
     datasetName: '',
-    authorName: email || '', // Pre-populate with IAP user email
+    authorName: email || '',
     publicationType: '',
     description: '',
     selectedFile: null,
+    // New fields
+    domain: '',
+    customDomain: '',
+    dataTopic: '',
+    scale: '',
+    quadName: '',
+    pubId: '',
+    loadType: '',
   });
 
   // State for validation errors
@@ -51,9 +98,10 @@ export const UploadForm: React.FC = () => {
   const [uploadMessage, setUploadMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [generatedFilename, setGeneratedFilename] = useState<string>('');
 
   // Update author name when email is loaded
-  React.useEffect(() => {
+  useEffect(() => {
     if (email && !formData.authorName) {
       setFormData((prevData) => ({
         ...prevData,
@@ -61,6 +109,52 @@ export const UploadForm: React.FC = () => {
       }));
     }
   }, [email, formData.authorName]);
+
+  // Generate filename whenever relevant fields change
+  useEffect(() => {
+    const generateFilename = () => {
+      const {
+        domain,
+        customDomain,
+        dataTopic,
+        scale,
+        quadName,
+        pubId,
+        loadType,
+        selectedFile
+      } = formData;
+
+      // Use custom domain if "custom" is selected, otherwise use selected domain
+      const effectiveDomain = domain === 'custom' ? customDomain : domain;
+
+      // Only generate if we have the required fields
+      if (effectiveDomain && dataTopic && loadType && selectedFile) {
+        const today = new Date();
+        const dateStr = today.getFullYear().toString() +
+                       (today.getMonth() + 1).toString().padStart(2, '0') +
+                       today.getDate().toString().padStart(2, '0');
+
+        // Build filename parts, filtering out empty values
+        const parts = [
+          effectiveDomain,
+          dataTopic,
+          scale,
+          quadName,
+          pubId,
+          loadType,
+          dateStr
+        ].filter(part => part && part.trim() !== '');
+
+        const filename = parts.join('_') + '.zip';
+        setGeneratedFilename(filename);
+      } else {
+        setGeneratedFilename('');
+      }
+    };
+
+    generateFilename();
+  }, [formData.domain, formData.customDomain, formData.dataTopic, formData.scale, 
+      formData.quadName, formData.pubId, formData.loadType, formData.selectedFile]);
 
   // Handle changes for text and select inputs
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -115,17 +209,89 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+  // Generate metadata object
+  const generateMetadata = () => {
+    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+    
+    return {
+      // Original metadata
+      projectName: formData.projectName,
+      datasetName: formData.datasetName,
+      authorName: formData.authorName,
+      publicationType: formData.publicationType,
+      description: formData.description,
+      
+      // Zip naming convention fields
+      domain: effectiveDomain,
+      dataTopic: formData.dataTopic,
+      scale: formData.scale || null,
+      quadName: formData.quadName || null,
+      pubId: formData.pubId || null,
+      loadType: formData.loadType,
+      
+      // System metadata
+      submittedBy: email,
+      submittedAt: new Date().toISOString(),
+      originalFilename: formData.selectedFile?.name || null,
+      originalFileSize: formData.selectedFile?.size || null,
+      zipFilename: generatedFilename,
+      
+      // Audit trail
+      userAgent: navigator.userAgent,
+      uploadSource: 'UGS Ingest Web Application',
+    };
+  };
+
   // Basic form validation
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
+    
+    // Original field validation
     if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
     if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
     if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
     if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
     if (!formData.selectedFile) newErrors.selectedFile = 'Please select or drop a file to upload.';
+    
+    // New field validation
+    if (!formData.domain) newErrors.domain = 'Domain is required.';
+    if (formData.domain === 'custom' && !formData.customDomain.trim()) {
+      newErrors.customDomain = 'Custom domain name is required.';
+    }
+    if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
+    if (!formData.loadType) newErrors.loadType = 'Load type is required.';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
+  };
+
+  // Create zip file with data and metadata
+  const createZipFile = async (): Promise<Blob> => {
+    // Import JSZip dynamically to avoid SSR issues
+    const JSZip = (await import('jszip')).default;
+    
+    const metadata = generateMetadata();
+    const metadataJson = JSON.stringify(metadata, null, 2);
+    
+    // Create zip file
+    const zip = new JSZip();
+    
+    // Add metadata file
+    zip.file('metadata.json', metadataJson);
+    
+    // Add the original data file in a data folder
+    if (formData.selectedFile) {
+      zip.file(`data/${formData.selectedFile.name}`, formData.selectedFile);
+    }
+    
+    // Generate the zip file
+    return await zip.generateAsync({ 
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: {
+        level: 6
+      }
+    });
   };
 
   // Handle form submission
@@ -141,19 +307,18 @@ export const UploadForm: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      console.log('Form Data to be submitted:', {
-        ...formData,
-        submittedBy: email, // Include the authenticated user
-        submittedAt: new Date().toISOString(),
-      });
-      if (formData.selectedFile) {
-        console.log('File to upload:', formData.selectedFile.name, formData.selectedFile.type);
-      }
+      // Create zip file with data and metadata
+      const zipBlob = await createZipFile();
+      
+      console.log('Generated filename:', generatedFilename);
+      console.log('Zip file created with size:', zipBlob.size);
+      console.log('Metadata:', generateMetadata());
 
-      // Simulate API call - replace with actual backend integration
+      // Simulate processing time
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      setUploadMessage('Data prepared and ready for backend processing!');
+      setUploadMessage(`Zip file "${generatedFilename}" created successfully and ready for upload!`);
+      
       // Reset form after successful submission
       setFormData({
         projectName: '',
@@ -162,17 +327,26 @@ export const UploadForm: React.FC = () => {
         publicationType: '',
         description: '',
         selectedFile: null,
+        domain: '',
+        customDomain: '',
+        dataTopic: '',
+        scale: '',
+        quadName: '',
+        pubId: '',
+        loadType: '',
       });
       setErrors({});
-      // Clear the file input element manually after form reset for UI consistency
+      setGeneratedFilename('');
+      
+      // Clear the file input element
       const fileInput = document.getElementById('file-input') as HTMLInputElement;
       if (fileInput) {
         fileInput.value = '';
       }
 
     } catch (error) {
-      console.error('Upload failed:', error);
-      setUploadMessage('An error occurred during upload. Please try again.');
+      console.error('Processing failed:', error);
+      setUploadMessage('An error occurred during processing. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -240,109 +414,273 @@ export const UploadForm: React.FC = () => {
         </div>
       </div>
 
+      {/* Generated filename preview */}
+      {generatedFilename && (
+        <div className="mb-6 p-4 bg-green-50 rounded-lg border border-green-200">
+          <p className="text-sm text-green-800 font-semibold">Generated Zip Filename:</p>
+          <p className="text-green-700 font-mono text-lg mt-1">{generatedFilename}</p>
+        </div>
+      )}
+
       <form onSubmit={handleSubmit}>
         <h2 className="text-3xl font-bold text-blue-600 mb-6 text-center">Upload Dataset</h2>
 
-        {/* Project Name */}
-        <div className="mb-6">
-          <label htmlFor="projectName" className="block text-gray-700 font-semibold mb-2">
-            Project Name:
-          </label>
-          <input
-            type="text"
-            id="projectName"
-            name="projectName"
-            value={formData.projectName}
-            onChange={handleChange}
-            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-              errors.projectName ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="Enter the project name"
-          />
-          {errors.projectName && <p className="text-red-500 text-sm mt-1">{errors.projectName}</p>}
+        {/* Project Information Section */}
+        <div className="mb-8">
+          <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
+            Project Information
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Project Name */}
+            <div>
+              <label htmlFor="projectName" className="block text-gray-700 font-semibold mb-2">
+                Project Name:
+              </label>
+              <input
+                type="text"
+                id="projectName"
+                name="projectName"
+                value={formData.projectName}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+                  errors.projectName ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="Enter the project name"
+              />
+              {errors.projectName && <p className="text-red-500 text-sm mt-1">{errors.projectName}</p>}
+            </div>
+
+            {/* Dataset Name */}
+            <div>
+              <label htmlFor="datasetName" className="block text-gray-700 font-semibold mb-2">
+                Dataset Name:
+              </label>
+              <input
+                type="text"
+                id="datasetName"
+                name="datasetName"
+                value={formData.datasetName}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+                  errors.datasetName ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="Enter the dataset name"
+              />
+              {errors.datasetName && <p className="text-red-500 text-sm mt-1">{errors.datasetName}</p>}
+            </div>
+
+            {/* Author Name */}
+            <div>
+              <label htmlFor="authorName" className="block text-gray-700 font-semibold mb-2">
+                Author Name:
+              </label>
+              <input
+                type="text"
+                id="authorName"
+                name="authorName"
+                value={formData.authorName}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+                  errors.authorName ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="Author name (auto-filled from your account)"
+              />
+              {errors.authorName && <p className="text-red-500 text-sm mt-1">{errors.authorName}</p>}
+            </div>
+
+            {/* Publication Type */}
+            <div>
+              <label htmlFor="publicationType" className="block text-gray-700 font-semibold mb-2">
+                Publication Type:
+              </label>
+              <select
+                id="publicationType"
+                name="publicationType"
+                value={formData.publicationType}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
+                  errors.publicationType ? 'border-red-500' : 'border-gray-300'
+                }`}
+              >
+                {publicationTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {errors.publicationType && <p className="text-red-500 text-sm mt-1">{errors.publicationType}</p>}
+            </div>
+          </div>
+
+          {/* Description */}
+          <div className="mt-6">
+            <label htmlFor="description" className="block text-gray-700 font-semibold mb-2">
+              Description (Optional):
+            </label>
+            <textarea
+              id="description"
+              name="description"
+              value={formData.description}
+              onChange={handleChange}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 resize-vertical"
+              placeholder="Provide additional details about the dataset"
+            />
+          </div>
         </div>
 
-        {/* Dataset Name */}
-        <div className="mb-6">
-          <label htmlFor="datasetName" className="block text-gray-700 font-semibold mb-2">
-            Dataset Name:
-          </label>
-          <input
-            type="text"
-            id="datasetName"
-            name="datasetName"
-            value={formData.datasetName}
-            onChange={handleChange}
-            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-              errors.datasetName ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="Enter the dataset name"
-          />
-          {errors.datasetName && <p className="text-red-500 text-sm mt-1">{errors.datasetName}</p>}
+        {/* File Naming Convention Section */}
+        <div className="mb-8">
+          <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
+            File Naming Convention
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Domain */}
+            <div>
+              <label htmlFor="domain" className="block text-gray-700 font-semibold mb-2">
+                Domain: <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="domain"
+                name="domain"
+                value={formData.domain}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
+                  errors.domain ? 'border-red-500' : 'border-gray-300'
+                }`}
+              >
+                {domainOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {errors.domain && <p className="text-red-500 text-sm mt-1">{errors.domain}</p>}
+            </div>
+
+            {/* Custom Domain (conditional) */}
+            {formData.domain === 'custom' && (
+              <div>
+                <label htmlFor="customDomain" className="block text-gray-700 font-semibold mb-2">
+                  Custom Domain: <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="customDomain"
+                  name="customDomain"
+                  value={formData.customDomain}
+                  onChange={handleChange}
+                  className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+                    errors.customDomain ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="Enter custom domain name"
+                />
+                {errors.customDomain && <p className="text-red-500 text-sm mt-1">{errors.customDomain}</p>}
+              </div>
+            )}
+
+            {/* Data Topic */}
+            <div>
+              <label htmlFor="dataTopic" className="block text-gray-700 font-semibold mb-2">
+                Data Topic: <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                id="dataTopic"
+                name="dataTopic"
+                value={formData.dataTopic}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+                  errors.dataTopic ? 'border-red-500' : 'border-gray-300'
+                }`}
+                placeholder="e.g., geolunits, alluvial_fan, wetland_inventory"
+              />
+              {errors.dataTopic && <p className="text-red-500 text-sm mt-1">{errors.dataTopic}</p>}
+            </div>
+
+            {/* Scale */}
+            <div>
+              <label htmlFor="scale" className="block text-gray-700 font-semibold mb-2">
+                Scale:
+              </label>
+              <input
+                type="text"
+                id="scale"
+                name="scale"
+                value={formData.scale}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
+                placeholder="e.g., 30x60, 7.5"
+              />
+            </div>
+
+            {/* Quad Name */}
+            <div>
+              <label htmlFor="quadName" className="block text-gray-700 font-semibold mb-2">
+                Quad Name:
+              </label>
+              <input
+                type="text"
+                id="quadName"
+                name="quadName"
+                value={formData.quadName}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
+                placeholder="USGS quad name"
+              />
+            </div>
+
+            {/* Publication ID */}
+            <div>
+              <label htmlFor="pubId" className="block text-gray-700 font-semibold mb-2">
+                Publication ID:
+              </label>
+              <input
+                type="text"
+                id="pubId"
+                name="pubId"
+                value={formData.pubId}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
+                placeholder="e.g., OFR-123"
+              />
+            </div>
+
+            {/* Load Type */}
+            <div>
+              <label htmlFor="loadType" className="block text-gray-700 font-semibold mb-2">
+                Load Type: <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="loadType"
+                name="loadType"
+                value={formData.loadType}
+                onChange={handleChange}
+                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
+                  errors.loadType ? 'border-red-500' : 'border-gray-300'
+                }`}
+              >
+                {loadTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {errors.loadType && <p className="text-red-500 text-sm mt-1">{errors.loadType}</p>}
+            </div>
+          </div>
         </div>
 
-        {/* Author Name */}
+        {/* File Upload Section */}
         <div className="mb-6">
-          <label htmlFor="authorName" className="block text-gray-700 font-semibold mb-2">
-            Author Name:
-          </label>
-          <input
-            type="text"
-            id="authorName"
-            name="authorName"
-            value={formData.authorName}
-            onChange={handleChange}
-            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-              errors.authorName ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="Author name (auto-filled from your account)"
-          />
-          {errors.authorName && <p className="text-red-500 text-sm mt-1">{errors.authorName}</p>}
-        </div>
-
-        {/* Publication Type */}
-        <div className="mb-6">
-          <label htmlFor="publicationType" className="block text-gray-700 font-semibold mb-2">
-            Publication Type:
-          </label>
-          <select
-            id="publicationType"
-            name="publicationType"
-            value={formData.publicationType}
-            onChange={handleChange}
-            className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
-              errors.publicationType ? 'border-red-500' : 'border-gray-300'
-            }`}
-          >
-            {publicationTypeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          {errors.publicationType && <p className="text-red-500 text-sm mt-1">{errors.publicationType}</p>}
-        </div>
-
-        {/* Description */}
-        <div className="mb-6">
-          <label htmlFor="description" className="block text-gray-700 font-semibold mb-2">
-            Description (Optional):
-          </label>
-          <textarea
-            id="description"
-            name="description"
-            value={formData.description}
-            onChange={handleChange}
-            rows={3}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 resize-vertical"
-            placeholder="Provide additional details about the dataset"
-          />
-        </div>
-
-        {/* File Upload with Drag & Drop */}
-        <div className="mb-6">
+          <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
+            Data File
+          </h3>
+          
           <label htmlFor="file-input" className="block text-gray-700 font-semibold mb-2">
-            Select Data File:
+            Select Data File: <span className="text-red-500">*</span>
           </label>
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center text-gray-500 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center min-h-[150px] ${
@@ -397,10 +735,10 @@ export const UploadForm: React.FC = () => {
             {isSubmitting ? (
               <div className="flex items-center">
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                Uploading...
+                Creating Zip...
               </div>
             ) : (
-              'Upload Data'
+              'Create Zip & Prepare Upload'
             )}
           </button>
           {uploadMessage && (
@@ -414,10 +752,23 @@ export const UploadForm: React.FC = () => {
           )}
         </div>
 
+        {/* Naming Convention Info */}
+        <div className="mt-6 p-4 bg-gray-50 rounded-md border border-gray-200">
+          <h4 className="text-sm font-semibold text-gray-800 mb-2">File Naming Convention:</h4>
+          <p className="text-xs text-gray-600 font-mono">
+            &lt;domain&gt;_&lt;data_topic&gt;_&lt;scale&gt;_&lt;quad_name&gt;_&lt;pub_id&gt;_&lt;load_type&gt;_&lt;YYYYMMDD&gt;.zip
+          </p>
+          <p className="text-xs text-gray-600 mt-2">
+            Required fields are marked with <span className="text-red-500">*</span>. 
+            Optional fields will be omitted from filename if left empty.
+          </p>
+        </div>
+
         {/* Audit Trail Info */}
-        <div className="mt-6 p-3 bg-gray-50 rounded-md border border-gray-200">
+        <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
           <p className="text-xs text-gray-600">
-            <strong>Audit Trail:</strong> All uploads are logged with user identification, timestamp, and file details for compliance and security purposes.
+            <strong>Audit Trail:</strong> All uploads are logged with user identification, timestamp, 
+            and file details. A metadata.json file will be included in the zip with complete audit information.
           </p>
         </div>
       </form>
