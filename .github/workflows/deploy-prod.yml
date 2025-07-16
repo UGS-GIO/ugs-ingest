@@ -82,7 +82,7 @@ jobs:
         
         echo "✅ Build completed, deploying to production..."
         
-        # Deploy new revision and allocate 100% traffic
+        # Deploy new revision with no traffic initially
         gcloud run deploy $SERVICE_NAME \
           --image $IMAGE_URL \
           --platform managed \
@@ -94,7 +94,23 @@ jobs:
           --timeout 300 \
           --set-env-vars NODE_ENV=production \
           --revision-suffix prod-${COMMIT_SHA} \
-          --tag latest
+          --tag latest \
+          --no-traffic
+        
+        # Get the new revision name
+        NEW_REVISION=$(gcloud run revisions list \
+          --service $SERVICE_NAME \
+          --region $REGION \
+          --limit 1 \
+          --format="value(metadata.name)")
+        
+        echo "New revision: $NEW_REVISION"
+        
+        # Allocate 100% traffic to the new revision
+        echo "Allocating 100% traffic to new revision..."
+        gcloud run services update-traffic $SERVICE_NAME \
+          --to-revisions=$NEW_REVISION=100 \
+          --region $REGION
         
         # Get the service URL
         SERVICE_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.url)")
@@ -130,7 +146,7 @@ jobs:
         gcloud run revisions list \
           --service $SERVICE_NAME \
           --region $REGION \
-          --filter="metadata.labels.serving-knative-dev/service=$SERVICE_NAME AND metadata.name~prod-" \
+          --filter="metadata.name~prod-" \
           --format="value(metadata.name)" \
           --sort-by="~metadata.creationTimestamp" \
           --limit=100 | tail -n +6 | while read REVISION; do
