@@ -10,7 +10,7 @@ interface FormData {
   authorName: string;
   publicationType: string;
   description: string;
-  selectedFile: File | null;
+  selectedFiles: File[];
   
   // New fields for zip naming convention
   domain: string;
@@ -29,7 +29,7 @@ interface FormErrors {
   authorName?: string;
   publicationType?: string;
   description?: string;
-  selectedFile?: string;
+  selectedFiles?: string;
   domain?: string;
   customDomain?: string;
   dataTopic?: string;
@@ -82,7 +82,7 @@ export const UploadForm: React.FC = () => {
     authorName: email || '',
     publicationType: '',
     description: '',
-    selectedFile: null,
+    selectedFiles: [],
     // New fields
     domain: '',
     customDomain: '',
@@ -121,14 +121,14 @@ export const UploadForm: React.FC = () => {
         quadName,
         pubId,
         loadType,
-        selectedFile
+        selectedFiles
       } = formData;
 
       // Use custom domain if "custom" is selected, otherwise use selected domain
       const effectiveDomain = domain === 'custom' ? customDomain : domain;
 
       // Only generate if we have the required fields
-      if (effectiveDomain && dataTopic && loadType && selectedFile) {
+      if (effectiveDomain && dataTopic && loadType && selectedFiles.length > 0) {
         const today = new Date();
         const dateStr = today.getFullYear().toString() +
                        (today.getMonth() + 1).toString().padStart(2, '0') +
@@ -154,7 +154,7 @@ export const UploadForm: React.FC = () => {
 
     generateFilename();
   }, [formData.domain, formData.customDomain, formData.dataTopic, formData.scale, 
-      formData.quadName, formData.pubId, formData.loadType, formData.selectedFile]);
+      formData.quadName, formData.pubId, formData.loadType, formData.selectedFiles]);
 
   // Handle changes for text and select inputs
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -169,24 +169,31 @@ export const UploadForm: React.FC = () => {
   };
 
   // Handle file selection (from input or drag-and-drop)
-  const handleFile = (file: File | null) => {
+  const handleFiles = (files: FileList | null) => {
+    if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+      setFormData((prevData) => ({
+        ...prevData,
+        selectedFiles: [...prevData.selectedFiles, ...fileArray],
+      }));
+    }
+    // Clear file error
+    if (errors.selectedFiles) {
+      setErrors((prevErrors) => ({ ...prevErrors, selectedFiles: undefined }));
+    }
+  };
+
+  // Remove a specific file from the selection
+  const removeFile = (indexToRemove: number) => {
     setFormData((prevData) => ({
       ...prevData,
-      selectedFile: file,
+      selectedFiles: prevData.selectedFiles.filter((_, index) => index !== indexToRemove),
     }));
-    // Clear file error
-    if (errors.selectedFile) {
-      setErrors((prevErrors) => ({ ...prevErrors, selectedFile: undefined }));
-    }
   };
 
   // Handler for direct file input change
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFile(e.target.files[0]);
-    } else {
-      handleFile(null);
-    }
+    handleFiles(e.target.files);
   };
 
   // Drag and Drop Handlers
@@ -203,10 +210,7 @@ export const UploadForm: React.FC = () => {
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFile(e.dataTransfer.files[0]);
-      e.dataTransfer.clearData();
-    }
+    handleFiles(e.dataTransfer.files);
   };
 
   // Generate metadata object
@@ -232,8 +236,14 @@ export const UploadForm: React.FC = () => {
       // System metadata
       submittedBy: email,
       submittedAt: new Date().toISOString(),
-      originalFilename: formData.selectedFile?.name || null,
-      originalFileSize: formData.selectedFile?.size || null,
+      originalFiles: formData.selectedFiles.map(file => ({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified
+      })),
+      totalFileCount: formData.selectedFiles.length,
+      totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
       zipFilename: generatedFilename,
       
       // Audit trail
@@ -251,7 +261,7 @@ export const UploadForm: React.FC = () => {
     if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
     if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
     if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
-    if (!formData.selectedFile) newErrors.selectedFile = 'Please select or drop a file to upload.';
+    if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
     
     // New field validation
     if (!formData.domain) newErrors.domain = 'Domain is required.';
@@ -279,10 +289,10 @@ export const UploadForm: React.FC = () => {
     // Add metadata file
     zip.file('metadata.json', metadataJson);
     
-    // Add the original data file in a data folder
-    if (formData.selectedFile) {
-      zip.file(`data/${formData.selectedFile.name}`, formData.selectedFile);
-    }
+    // Add the original data files in a data folder
+    formData.selectedFiles.forEach((file) => {
+      zip.file(`data/${file.name}`, file);
+    });
     
     // Generate the zip file
     return await zip.generateAsync({ 
@@ -326,7 +336,7 @@ export const UploadForm: React.FC = () => {
         authorName: email || '',
         publicationType: '',
         description: '',
-        selectedFile: null,
+        selectedFiles: [],
         domain: '',
         customDomain: '',
         dataTopic: '',
@@ -680,13 +690,13 @@ export const UploadForm: React.FC = () => {
           </h3>
           
           <label htmlFor="file-input" className="block text-gray-700 font-semibold mb-2">
-            Select Data File: <span className="text-red-500">*</span>
+            Select Data Files: <span className="text-red-500">*</span>
           </label>
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center text-gray-500 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center min-h-[150px] ${
               isDragging 
                 ? 'border-blue-500 bg-blue-50' 
-                : errors.selectedFile 
+                : errors.selectedFiles 
                   ? 'border-red-500' 
                   : 'border-gray-400'
             }`}
@@ -697,6 +707,7 @@ export const UploadForm: React.FC = () => {
             <input
               type="file"
               id="file-input"
+              multiple
               onChange={handleFileChange}
               className="hidden"
             />
@@ -705,24 +716,54 @@ export const UploadForm: React.FC = () => {
                 <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
-            <p className="mb-2">Drag & drop your file here, or</p>
+            <p className="mb-2">Drag & drop your files here, or</p>
             <button
               type="button"
               onClick={() => document.getElementById('file-input')?.click()}
               className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
             >
-              Choose File
+              Choose Files
             </button>
-            {formData.selectedFile && (
-              <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md">
-                <p className="font-bold text-green-800">Selected: {formData.selectedFile.name}</p>
-                <p className="text-sm text-green-600">
-                  Size: {(formData.selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                </p>
+            
+            {/* Selected Files Display */}
+            {formData.selectedFiles.length > 0 && (
+              <div className="mt-4 w-full">
+                <div className="text-left">
+                  <p className="font-bold text-green-800 mb-2">
+                    Selected Files ({formData.selectedFiles.length}):
+                  </p>
+                  <div className="max-h-32 overflow-y-auto space-y-2">
+                    {formData.selectedFiles.map((file, index) => (
+                      <div key={index} className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded-md">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-green-800 truncate">{file.name}</p>
+                          <p className="text-xs text-green-600">
+                            {(file.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeFile(index)}
+                          className="ml-2 p-1 text-red-500 hover:text-red-700 hover:bg-red-100 rounded"
+                          title="Remove file"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-green-200">
+                    <p className="text-sm text-green-600">
+                      Total Size: {(formData.selectedFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024).toFixed(2)} MB
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
           </div>
-          {errors.selectedFile && <p className="text-red-500 text-sm mt-1">{errors.selectedFile}</p>}
+          {errors.selectedFiles && <p className="text-red-500 text-sm mt-1">{errors.selectedFiles}</p>}
         </div>
 
         {/* Submission Button */}
