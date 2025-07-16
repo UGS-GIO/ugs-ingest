@@ -168,15 +168,12 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Handle file selection (from input or drag-and-drop)
-  const handleFiles = (files: FileList | null) => {
-    if (files && files.length > 0) {
-      const fileArray = Array.from(files);
-      setFormData((prevData) => ({
-        ...prevData,
-        selectedFiles: [...prevData.selectedFiles, ...fileArray],
-      }));
-    }
+  // Add individual file
+  const addFiles = (newFiles: File[]) => {
+    setFormData((prevData) => ({
+      ...prevData,
+      selectedFiles: [...prevData.selectedFiles, ...newFiles],
+    }));
     // Clear file error
     if (errors.selectedFiles) {
       setErrors((prevErrors) => ({ ...prevErrors, selectedFiles: undefined }));
@@ -193,7 +190,12 @@ export const UploadForm: React.FC = () => {
 
   // Handler for direct file input change
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    handleFiles(e.target.files);
+    if (e.target.files && e.target.files.length > 0) {
+      const newFiles = Array.from(e.target.files);
+      addFiles(newFiles);
+      // Reset the input so the same files can be selected again if needed
+      e.target.value = '';
+    }
   };
 
   // Drag and Drop Handlers
@@ -210,7 +212,11 @@ export const UploadForm: React.FC = () => {
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    handleFiles(e.dataTransfer.files);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const newFiles = Array.from(e.dataTransfer.files);
+      addFiles(newFiles);
+      e.dataTransfer.clearData();
+    }
   };
 
   // Generate metadata object
