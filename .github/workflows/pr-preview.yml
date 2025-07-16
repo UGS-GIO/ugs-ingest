@@ -201,41 +201,62 @@ jobs:
         echo "Revision tag: $REVISION_TAG"
         
         # Remove traffic from the tagged revision (if any)
+        echo "Removing tag from traffic allocation..."
         gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
           --remove-tags $REVISION_TAG \
           --region ${{ env.REGION }} \
-          --quiet || echo "No traffic to remove"
+          --quiet 2>/dev/null || echo "ℹ️ No tag to remove (expected)"
         
-        # Get the revision name
-        REVISION_NAME=$(gcloud run revisions list \
+        # Find and delete the revision using a simpler approach
+        echo "Looking for revisions to clean up..."
+        
+        # List all revisions for this service and filter by our tag
+        REVISIONS=$(gcloud run revisions list \
           --service ${{ env.SERVICE_NAME }} \
           --region ${{ env.REGION }} \
-          --filter="metadata.labels.serving-knative-dev/service=${{ env.SERVICE_NAME }} AND metadata.name~$REVISION_TAG" \
           --format="value(metadata.name)" \
-          --limit 1)
+          --filter="metadata.name~$REVISION_TAG")
         
-        if [ -n "$REVISION_NAME" ]; then
-          echo "Deleting revision: $REVISION_NAME"
-          gcloud run revisions delete $REVISION_NAME \
-            --region ${{ env.REGION }} \
-            --quiet
-          echo "✅ Revision deleted"
+        if [ -z "$REVISIONS" ]; then
+          echo "ℹ️ No revisions found with tag: $REVISION_TAG"
         else
-          echo "ℹ️ No revision found to delete"
+          echo "Found revisions to delete:"
+          echo "$REVISIONS"
+          
+          # Delete each revision
+          echo "$REVISIONS" | while read -r REVISION_NAME; do
+            if [ -n "$REVISION_NAME" ]; then
+              echo "Deleting revision: $REVISION_NAME"
+              gcloud run revisions delete "$REVISION_NAME" \
+                --region ${{ env.REGION }} \
+                --quiet || echo "Failed to delete $REVISION_NAME"
+            fi
+          done
         fi
         
-        # Clean up container image
-        IMAGE_PATTERN="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/containers/${{ env.SERVICE_NAME }}:pr-${PR_NUMBER}-*"
+        # Clean up container images
+        echo "Cleaning up container images..."
         
-        # List and delete images for this PR
-        gcloud artifacts docker images list ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/containers/${{ env.SERVICE_NAME }} \
+        # List images with PR tag pattern
+        IMAGES=$(gcloud artifacts docker images list \
+          ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/containers/${{ env.SERVICE_NAME }} \
           --filter="tags~pr-${PR_NUMBER}" \
-          --format="value(IMAGE)" | while read IMAGE; do
-          if [ -n "$IMAGE" ]; then
-            echo "Deleting image: $IMAGE"
-            gcloud artifacts docker images delete "$IMAGE" --quiet
-          fi
-        done
+          --format="value(DIGEST)" 2>/dev/null || echo "")
+        
+        if [ -z "$IMAGES" ]; then
+          echo "ℹ️ No container images found for PR #${PR_NUMBER}"
+        else
+          echo "Found container images to delete"
+          
+          # Delete each image by digest
+          echo "$IMAGES" | while read -r DIGEST; do
+            if [ -n "$DIGEST" ]; then
+              IMAGE_URL="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/containers/${{ env.SERVICE_NAME }}@${DIGEST}"
+              echo "Deleting image: $IMAGE_URL"
+              gcloud artifacts docker images delete "$IMAGE_URL" --quiet 2>/dev/null || echo "Failed to delete image"
+            fi
+          done
+        fi
         
         echo "🧹 Cleanup completed for PR #${PR_NUMBER}"
 
