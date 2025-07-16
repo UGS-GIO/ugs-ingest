@@ -192,36 +192,50 @@ export const UploadForm: React.FC = () => {
 
   // Handler for direct file input change
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    console.log('File input changed, files:', e.target.files); // Debug log
+    console.log('File input changed!'); // First debug log
+    console.log('Event target:', e.target); // Check the target
+    console.log('Files property:', e.target.files); // Check files property
+    console.log('Files length:', e.target.files?.length); // Check length
+    
     if (e.target.files && e.target.files.length > 0) {
       const newFiles = Array.from(e.target.files);
-      console.log('New files selected:', newFiles.length); // Debug log
+      console.log('New files selected:', newFiles.length, newFiles.map(f => f.name)); // Debug log
       addFiles(newFiles);
       // Reset the input so the same files can be selected again if needed
       e.target.value = '';
+    } else {
+      console.log('No files detected or files is null');
     }
   };
 
   // Drag and Drop Handlers
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    console.log('Drag over triggered');
     setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    console.log('Drag leave triggered');
     setIsDragging(false);
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
+    console.log('Drop triggered!'); // First debug log
+    console.log('DataTransfer:', e.dataTransfer); // Check dataTransfer
     console.log('Files dropped:', e.dataTransfer.files); // Debug log
+    console.log('Files count:', e.dataTransfer.files?.length); // Check count
+    
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const newFiles = Array.from(e.dataTransfer.files);
-      console.log('Dropped files:', newFiles.length); // Debug log
+      console.log('Dropped files:', newFiles.length, newFiles.map(f => f.name)); // Debug log
       addFiles(newFiles);
       e.dataTransfer.clearData();
+    } else {
+      console.log('No files in drop or files is null');
     }
   };
 
@@ -732,7 +746,13 @@ export const UploadForm: React.FC = () => {
             <p className="mb-2">Drag & drop multiple files here, or</p>
             <button
               type="button"
-              onClick={() => document.getElementById('file-input')?.click()}
+              onClick={() => {
+                console.log('Choose files button clicked');
+                const input = document.getElementById('file-input') as HTMLInputElement;
+                console.log('Input element:', input);
+                console.log('Input multiple attribute:', input?.multiple);
+                input?.click();
+              }}
               className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
             >
               Choose Multiple Files
