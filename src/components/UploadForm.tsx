@@ -168,8 +168,9 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Add individual file
+  // Add files to selection
   const addFiles = (newFiles: File[]) => {
+    console.log('Adding files:', newFiles.map(f => f.name)); // Debug log
     setFormData((prevData) => ({
       ...prevData,
       selectedFiles: [...prevData.selectedFiles, ...newFiles],
@@ -182,6 +183,7 @@ export const UploadForm: React.FC = () => {
 
   // Remove a specific file from the selection
   const removeFile = (indexToRemove: number) => {
+    console.log('Removing file at index:', indexToRemove); // Debug log
     setFormData((prevData) => ({
       ...prevData,
       selectedFiles: prevData.selectedFiles.filter((_, index) => index !== indexToRemove),
@@ -190,8 +192,10 @@ export const UploadForm: React.FC = () => {
 
   // Handler for direct file input change
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    console.log('File input changed, files:', e.target.files); // Debug log
     if (e.target.files && e.target.files.length > 0) {
       const newFiles = Array.from(e.target.files);
+      console.log('New files selected:', newFiles.length); // Debug log
       addFiles(newFiles);
       // Reset the input so the same files can be selected again if needed
       e.target.value = '';
@@ -212,8 +216,10 @@ export const UploadForm: React.FC = () => {
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
+    console.log('Files dropped:', e.dataTransfer.files); // Debug log
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const newFiles = Array.from(e.dataTransfer.files);
+      console.log('Dropped files:', newFiles.length); // Debug log
       addFiles(newFiles);
       e.dataTransfer.clearData();
     }
@@ -716,20 +722,24 @@ export const UploadForm: React.FC = () => {
               multiple
               onChange={handleFileChange}
               className="hidden"
+              accept="*/*"
             />
             <div className="mb-4">
               <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
                 <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
-            <p className="mb-2">Drag & drop your files here, or</p>
+            <p className="mb-2">Drag & drop multiple files here, or</p>
             <button
               type="button"
               onClick={() => document.getElementById('file-input')?.click()}
               className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
             >
-              Choose Files
+              Choose Multiple Files
             </button>
+            <p className="text-xs text-gray-500 mt-2">
+              Hold Ctrl (Windows) or Cmd (Mac) to select multiple files
+            </p>
             
             {/* Selected Files Display */}
             {formData.selectedFiles.length > 0 && (
