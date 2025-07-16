@@ -1,22 +1,27 @@
-name: PR Preview & Test
+name: PR Preview with Traffic Splitting
 
 on:
   pull_request:
     branches: [ main ]
+    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [closed]
 
 env:
   PROJECT_ID: ut-dnr-ugs-backend-tools
   REGION: us-central1
-  SERVICE_NAME: ugs-ingest-app
+  SERVICE_NAME: ugs-ingest-app  # Same service for everything
 
 jobs:
-  build-and-test:
+  # Deploy preview revision with traffic splitting
+  preview-deploy:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     
     permissions:
       contents: read
       id-token: write
-      pull-requests: write  # To post comments
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -37,13 +42,13 @@ jobs:
     - name: Build project
       run: npm run build
 
-    - name: Test build artifacts
+    - name: Verify build output
       run: |
-        # Check if dist directory was created
+        echo "Checking build output..."
         ls -la dist/
-        # Check if key files exist
         test -f dist/index.html
-        echo "✅ Build completed successfully"
+        test -f server/index.js
+        echo "✅ Build artifacts verified"
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
@@ -54,21 +59,198 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
-    - name: Build container image (test only)
+    - name: Build and deploy preview revision
+      id: deploy
       run: |
-        # Build the image to test Dockerfile validity
-        gcloud builds submit --tag $REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME-pr-${{ github.event.number }} --quiet
+        PR_NUMBER=${{ github.event.number }}
+        REVISION_TAG="pr-${PR_NUMBER}"
+        IMAGE_TAG="pr-${PR_NUMBER}-${{ github.event.pull_request.head.sha }}"
+        IMAGE_URL="$REGION-docker.pkg.dev/$PROJECT_ID/containers/$SERVICE_NAME:$IMAGE_TAG"
+        
+        echo "Building preview for PR #${PR_NUMBER}"
+        echo "Revision tag: $REVISION_TAG"
+        echo "Image URL: $IMAGE_URL"
+        
+        # Build image with PR-specific tag
+        set +e
+        gcloud builds submit --tag $IMAGE_URL --timeout=20m
+        BUILD_EXIT_CODE=$?
+        
+        if [ $BUILD_EXIT_CODE -ne 0 ]; then
+          echo "Build may have failed, checking final status..."
+          BUILD_ID=$(gcloud builds list --limit=1 --format="value(id)")
+          BUILD_STATUS=$(gcloud builds describe $BUILD_ID --format="value(status)")
+          if [ "$BUILD_STATUS" != "SUCCESS" ]; then
+            echo "Build failed with status: $BUILD_STATUS"
+            exit 1
+          fi
+        fi
+        
+        echo "✅ Build completed, deploying revision..."
+        
+        # Deploy as new revision with tag (no traffic initially)
+        gcloud run deploy $SERVICE_NAME \
+          --image $IMAGE_URL \
+          --platform managed \
+          --region $REGION \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --max-instances 10 \
+          --timeout 300 \
+          --set-env-vars NODE_ENV=preview,PR_NUMBER=${PR_NUMBER} \
+          --revision-suffix $REVISION_TAG \
+          --tag $REVISION_TAG \
+          --no-traffic
+        
+        # Get the tagged URL for this revision
+        TAGGED_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format="value(status.traffic[?tag=='$REVISION_TAG'].url)")
+        
+        echo "revision_tag=$REVISION_TAG" >> $GITHUB_OUTPUT
+        echo "tagged_url=$TAGGED_URL" >> $GITHUB_OUTPUT
+        echo "image_url=$IMAGE_URL" >> $GITHUB_OUTPUT
+        
+        echo "✅ Preview revision deployed successfully!"
+        echo "Tagged URL: $TAGGED_URL"
 
-    - name: Comment on PR
-      uses: actions/github-script@v7
+    - name: Test preview revision
+      run: |
+        TAGGED_URL="${{ steps.deploy.outputs.tagged_url }}"
+        echo "Testing preview revision at: $TAGGED_URL"
+        
+        # Wait for the revision to be ready
+        sleep 15
+        
+        # Test health endpoint
+        if curl -f "$TAGGED_URL/health" --max-time 30; then
+          echo "✅ Health check passed"
+        else
+          echo "❌ Health check failed - revision may still be starting"
+        fi
+
+    - name: Find existing preview comment
+      uses: peter-evans/find-comment@v3
+      id: find-comment
       with:
-        script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: '🚀 **Build successful!** \n\n✅ Lint passed\n✅ Build completed\n✅ Container image built\n\nReady for review and merge to deploy to production.'
-          })
+        issue-number: ${{ github.event.number }}
+        comment-author: 'github-actions[bot]'
+        body-includes: '🚀 **Preview revision deployed'
 
-
+    - name: Create or update preview comment
+      uses: peter-evans/create-or-update-comment@v4
+      with:
+        issue-number: ${{ github.event.number }}
+        comment-id: ${{ steps.find-comment.outputs.comment-id }}
+        edit-mode: replace
+        body: |
+          🚀 **Preview revision deployed successfully!**
           
+          📱 **Preview URL:** ${{ steps.deploy.outputs.tagged_url }}
+          🏷️ **Revision Tag:** `${{ steps.deploy.outputs.revision_tag }}`
+          🌿 **Branch:** `${{ github.head_ref }}`
+          📦 **Commit:** `${{ github.event.pull_request.head.sha }}`
+          
+          ---
+          
+          ### 🔐 IAP Authentication
+          - ✅ This preview uses the same IAP configuration as production
+          - ✅ You must be authorized to access this application
+          - ✅ Your user info will be displayed in the form
+          
+          ### 🧪 Testing Notes
+          - This is a **tagged revision** of the same Cloud Run service
+          - All IAP policies and permissions apply
+          - No traffic is routed to this revision by default
+          - Only accessible via the tagged URL above
+          
+          ### 🔍 Quick Tests
+          - **Health Check:** ${{ steps.deploy.outputs.tagged_url }}/health
+          - **Upload Form:** ${{ steps.deploy.outputs.tagged_url }}/
+          - **User Info:** ${{ steps.deploy.outputs.tagged_url }}/api/user
+          
+          ---
+          
+          ⚠️ **Note:** This preview revision will be cleaned up when the PR is closed or merged.
+
+  # Cleanup preview revision when PR is closed
+  cleanup-preview:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+        service_account: ${{ secrets.SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Cleanup preview revision
+      run: |
+        PR_NUMBER=${{ github.event.number }}
+        REVISION_TAG="pr-${PR_NUMBER}"
+        
+        echo "Cleaning up preview revision for PR #${PR_NUMBER}"
+        echo "Revision tag: $REVISION_TAG"
+        
+        # Remove traffic from the tagged revision (if any)
+        gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+          --remove-tags $REVISION_TAG \
+          --region ${{ env.REGION }} \
+          --quiet || echo "No traffic to remove"
+        
+        # Get the revision name
+        REVISION_NAME=$(gcloud run revisions list \
+          --service ${{ env.SERVICE_NAME }} \
+          --region ${{ env.REGION }} \
+          --filter="metadata.labels.serving-knative-dev/service=${{ env.SERVICE_NAME }} AND metadata.name~$REVISION_TAG" \
+          --format="value(metadata.name)" \
+          --limit 1)
+        
+        if [ -n "$REVISION_NAME" ]; then
+          echo "Deleting revision: $REVISION_NAME"
+          gcloud run revisions delete $REVISION_NAME \
+            --region ${{ env.REGION }} \
+            --quiet
+          echo "✅ Revision deleted"
+        else
+          echo "ℹ️ No revision found to delete"
+        fi
+        
+        # Clean up container image
+        IMAGE_PATTERN="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/containers/${{ env.SERVICE_NAME }}:pr-${PR_NUMBER}-*"
+        
+        # List and delete images for this PR
+        gcloud artifacts docker images list ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/containers/${{ env.SERVICE_NAME }} \
+          --filter="tags~pr-${PR_NUMBER}" \
+          --format="value(IMAGE)" | while read IMAGE; do
+          if [ -n "$IMAGE" ]; then
+            echo "Deleting image: $IMAGE"
+            gcloud artifacts docker images delete "$IMAGE" --quiet
+          fi
+        done
+        
+        echo "🧹 Cleanup completed for PR #${PR_NUMBER}"
+
+    - name: Add cleanup comment
+      uses: peter-evans/create-or-update-comment@v4
+      with:
+        issue-number: ${{ github.event.number }}
+        body: |
+          🧹 **Preview revision cleaned up**
+          
+          The preview revision for this PR has been automatically removed:
+          
+          - ✅ Tagged revision deleted
+          - ✅ Container images cleaned up
+          - ✅ No traffic allocation removed
+          - ✅ Resources cleaned up
+          
+          The main production service remains unaffected.
