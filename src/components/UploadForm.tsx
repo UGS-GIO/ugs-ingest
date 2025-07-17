@@ -153,8 +153,7 @@ export const UploadForm: React.FC = () => {
     };
 
     generateFilename();
-  }, [formData.domain, formData.customDomain, formData.dataTopic, formData.scale, 
-      formData.quadName, formData.pubId, formData.loadType, formData.selectedFiles]);
+  }, [formData]);
 
   // Handle changes for text and select inputs
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -756,6 +755,13 @@ export const UploadForm: React.FC = () => {
               className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
             >
               Choose Multiple Files
+            </button>
+            <button
+              type="button"
+              onClick={() => console.log('Test button clicked - console working!')}
+              className="ml-2 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors duration-200 text-sm"
+            >
+              Test Console
             </button>
             <p className="text-xs text-gray-500 mt-2">
               Hold Ctrl (Windows) or Cmd (Mac) to select multiple files
