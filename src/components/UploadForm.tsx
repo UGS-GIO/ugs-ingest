@@ -728,7 +728,7 @@ export const UploadForm: React.FC = () => {
               onClick={() => document.getElementById('file-input')?.click()}
               className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
             >
-              Choose Multiple Files
+              Choose Files
             </button>
             <p className="text-xs text-gray-500 mt-2">
               Hold Ctrl (Windows) or Cmd (Mac) to select multiple files
@@ -788,7 +788,7 @@ export const UploadForm: React.FC = () => {
                 Creating Zip...
               </div>
             ) : (
-              'Create Zip & Prepare Upload'
+              'Upload'
             )}
           </button>
           {uploadMessage && (
