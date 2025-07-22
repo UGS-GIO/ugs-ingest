@@ -1,0 +1,6 @@
+# Function dependencies, for example:
+# google-cloud-storage
+# fiona
+
+google-cloud-storage==2.16.0
+Fiona>=1.9

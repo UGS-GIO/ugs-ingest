@@ -1,0 +1,12 @@
+{
+  "name": "geoparquet-converter-node",
+  "version": "1.0.0",
+  "description": "Converts geospatial files in a ZIP to GeoParquet.",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
+    "@google-cloud/storage": "^7.0.0",
+    "gdal-async": "^3.8.0",
+    "yauzl": "^3.1.0"
+  }
+}
