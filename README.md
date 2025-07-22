@@ -158,30 +158,6 @@ docker build -t ugs-ingest-test .
 docker run -p 8080:8080 ugs-ingest-test
 ```
 
-## 📊 Monitoring & Logs
-
-### Cloud Run Logs
-
-Access logs via Google Cloud Console:
-```
-https://console.cloud.google.com/run/detail/us-central1/ugs-ingest-app/logs
-```
-
-### Pull Request Process
-
-1. Create feature branch from `main`
-2. Make changes and commit
-3. Push branch and create pull request
-4. Automated tests and preview deployment will run
-5. Review and merge to deploy to production
-
-### Development Guidelines
-
-- Follow TypeScript best practices
-- Use Tailwind CSS for styling
-- Include proper error handling
-- Test IAP integration with simulated headers
-- Update documentation for new features
 
 ## 📋 Project Structure
 
@@ -203,13 +179,6 @@ ugs-ingest/
 └── vite.config.ts            # Vite configuration
 ```
 
-## 📞 Support
-
-For technical issues or access requests:
-
-- **Internal UGS Team**: Contact your system administrator
-- **IAP Access**: Request access through Google Cloud Console
-- **Development Issues**: Create GitHub issue or contact development team
 
 ## 📄 License
 
@@ -217,4 +186,4 @@ Internal use only - Utah Department of Natural Resources, Utah Geological Survey
 
 ---
 
-**Utah Geological Survey - Technical Infrastructure Team**
+**Utah Geological Survey**
