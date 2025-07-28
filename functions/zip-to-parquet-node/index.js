@@ -52,8 +52,9 @@ functions.cloudEvent('convertToGeoparquetNode', async (cloudEvent) => {
 
   const tempDir = os.tmpdir();
   const localZipPath = path.join(tempDir, fileName);
-  const outputFileName = `${path.basename(fileName, '.zip')}.parquet`;
-  const tempOutputPath = path.join(tempDir, outputFileName);
+  
+  // These will be set after checking driver availability
+  let outputFileName, tempOutputPath, outputFormat, outputExtension, formatOptions;
 
   try {
     // 1. Download the zip file to a temporary location
@@ -73,30 +74,81 @@ functions.cloudEvent('convertToGeoparquetNode', async (cloudEvent) => {
     const gdalInputPath = `/vsizip/${localZipPath}/${sourceDataPathInZip}`;
     console.log(`📂 Found source data: ${gdalInputPath}`);
     
-    // 3. Open the source dataset and convert to GeoParquet
-    console.log(`🔄 Starting GDAL conversion...`);
-    const inputDataset = await gdal.openAsync(gdalInputPath);
-    console.log(`📊 Dataset opened successfully. Layers: ${inputDataset.layers.count()}`);
+    // 3. Check available drivers and determine output format
+    console.log(`🔍 Checking available GDAL drivers...`);
+    const drivers = gdal.drivers.getNames();
+    console.log(`📋 Available drivers: ${drivers.slice(0, 10).join(', ')}... (${drivers.length} total)`);
     
-    // These options are equivalent to the ogr2ogr command flags
-    const translateOptions = [
-      '-f', 'Parquet',
-      '--config', 'OGR_PARQUET_ALLOW_ALL_DIMS', 'YES',
-      '-makevalid',
-      '-lco', 'COMPRESSION=SNAPPY',
-      '-lco', 'EDGES=PLANAR',
-      '-lco', 'GEOMETRY_ENCODING=WKB',
-      '-lco', 'GEOMETRY_NAME=geometry',
-      '-lco', 'ROW_GROUP_SIZE=65536'
-    ];
-
-    await gdal.vectorTranslateAsync(tempOutputPath, inputDataset, translateOptions);
+    const hasParquetDriver = drivers.includes('Parquet');
+    console.log(`🎯 Parquet driver available: ${hasParquetDriver}`);
+    
+    let outputFormat, outputExtension, formatOptions;
+    if (hasParquetDriver) {
+      console.log(`⚙️  Using Parquet format with GDAL configuration...`);
+      gdal.config.set('OGR_PARQUET_ALLOW_ALL_DIMS', 'YES');
+      outputFormat = 'Parquet';
+      outputExtension = '.parquet';
+      formatOptions = [
+        '-f', 'Parquet',
+        '-makevalid',
+        '-lco', 'COMPRESSION=SNAPPY',
+        '-lco', 'EDGES=PLANAR',
+        '-lco', 'GEOMETRY_ENCODING=WKB',
+        '-lco', 'GEOMETRY_NAME=geometry',
+        '-lco', 'ROW_GROUP_SIZE=65536'
+      ];
+    } else {
+      console.log(`⚠️  Parquet driver not available, falling back to GeoJSON...`);
+      outputFormat = 'GeoJSON';
+      outputExtension = '.geojson';
+      formatOptions = [
+        '-f', 'GeoJSON',
+        '-makevalid'
+      ];
+    }
+    
+    // Set output file paths now that we know the extension
+    outputFileName = `${path.basename(fileName, '.zip')}${outputExtension}`;
+    tempOutputPath = path.join(tempDir, outputFileName);
+    
+    // 4. Try system ogr2ogr first, fallback to Node.js GDAL
+    console.log(`🔄 Attempting conversion with system ogr2ogr...`);
+    
+    try {
+      const { exec } = require('child_process');
+      const util = require('util');
+      const execAsync = util.promisify(exec);
+      
+      // First try Parquet with system ogr2ogr
+      const ogr2ogrCmd = `ogr2ogr -f Parquet "${tempOutputPath.replace('.geojson', '.parquet')}" "${gdalInputPath}" --config OGR_PARQUET_ALLOW_ALL_DIMS YES -makevalid -lco COMPRESSION=SNAPPY -lco EDGES=PLANAR -lco GEOMETRY_ENCODING=WKB -lco GEOMETRY_NAME=geometry -lco ROW_GROUP_SIZE=65536`;
+      
+      console.log(`🔧 Running: ${ogr2ogrCmd}`);
+      await execAsync(ogr2ogrCmd);
+      
+      // Update paths for successful Parquet conversion
+      outputFormat = 'Parquet';
+      outputExtension = '.parquet';
+      outputFileName = `${path.basename(fileName, '.zip')}.parquet`;
+      tempOutputPath = path.join(tempDir, outputFileName);
+      
+      console.log(`✅ System ogr2ogr successful - Parquet format used`);
+      
+    } catch (ogrError) {
+      console.log(`⚠️  System ogr2ogr failed: ${ogrError.message}`);
+      console.log(`🔄 Falling back to Node.js GDAL with available drivers...`);
+      
+      // Fall back to Node.js GDAL approach
+      const inputDataset = await gdal.openAsync(gdalInputPath);
+      console.log(`📊 Dataset opened successfully. Layers: ${inputDataset.layers.count()}`);
+      
+      await gdal.vectorTranslateAsync(tempOutputPath, inputDataset, formatOptions);
+    }
     
     // Verify output file was created
     const stats = await fs.stat(tempOutputPath);
-    console.log(`💾 Parquet file created successfully: ${stats.size} bytes`);
+    console.log(`💾 ${outputFormat} file created successfully: ${stats.size} bytes`);
 
-    // 4. Upload the resulting Parquet file to the output bucket
+    // 5. Upload the resulting Parquet file to the output bucket
     console.log(`⬆️  Uploading ${outputFileName} to bucket ${outputBucketName}...`);
     await storage.bucket(outputBucketName).upload(tempOutputPath, {
       destination: outputFileName,
@@ -119,7 +171,7 @@ functions.cloudEvent('convertToGeoparquetNode', async (cloudEvent) => {
     // Re-throw to trigger Cloud Function retry if needed
     throw err;
   } finally {
-    // 5. Clean up temporary files
+    // 6. Clean up temporary files
     console.log(`🧹 Cleaning up temporary files...`);
     await fs.unlink(localZipPath).catch(err => 
       console.error(`Failed to delete temp zip: ${err.message}`)
