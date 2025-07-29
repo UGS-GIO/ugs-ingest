@@ -400,7 +400,38 @@ export const UploadForm: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  // Create zip file with data and metadata
+  // Upload zip to GCS via Cloud Function
+  const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
+    try {
+      const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
+      
+      console.log('Uploading to Cloud Function:', functionUrl);
+      console.log('Filename:', filename);
+      console.log('Zip size:', zipBlob.size, 'bytes');
+
+      const response = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/zip',
+          'X-Filename': filename,
+        },
+        body: zipBlob,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Upload failed: ${errorData.error || response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Upload successful:', result);
+      return true;
+
+    } catch (error) {
+      console.error('❌ Upload to GCS failed:', error);
+      throw error;
+    }
+  };
   const createZipFile = async (): Promise<Blob> => {
     // Import JSZip dynamically to avoid SSR issues
     const JSZip = (await import('jszip')).default;
@@ -442,17 +473,19 @@ export const UploadForm: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      // Create zip file with data and metadata
+      // Step 1: Create zip file with data and metadata
+      setUploadMessage('Creating zip file...');
       const zipBlob = await createZipFile();
       
       console.log('Generated filename:', generatedFilename);
       console.log('Zip file created with size:', zipBlob.size);
-      console.log('Metadata:', generateMetadata());
 
-      // Simulate processing time
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Step 2: Upload to GCS
+      setUploadMessage('Uploading to cloud storage...');
+      await uploadZipToGCS(zipBlob, generatedFilename);
 
-      setUploadMessage(`Zip file "${generatedFilename}" created successfully and ready for upload!`);
+      // Step 3: Success!
+      setUploadMessage(`✅ Upload successful! File "${generatedFilename}" has been uploaded to cloud storage.`);
       
       // Reset form after successful submission
       setFormData({
@@ -480,8 +513,9 @@ export const UploadForm: React.FC = () => {
       }
 
     } catch (error) {
-      console.error('Processing failed:', error);
-      setUploadMessage('An error occurred during processing. Please try again.');
+      console.error('Upload process failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setUploadMessage(`❌ Upload failed: ${errorMessage}. Please try again.`);
     } finally {
       setIsSubmitting(false);
     }
@@ -870,7 +904,7 @@ export const UploadForm: React.FC = () => {
               </div>
             ) : (
               <>
-                <p className="mb-2">Drag & drop files or folders here or</p>
+                <p className="mb-2">Drag & drop files or folders here (including .gdb), or</p>
                 <button
                   type="button"
                   onClick={() => document.getElementById('file-input')?.click()}
@@ -878,6 +912,11 @@ export const UploadForm: React.FC = () => {
                 >
                   Choose Files
                 </button>
+                <p className="text-xs text-gray-500 mt-2">
+                  ✅ Supports File Geodatabases (.gdb folders)<br/>
+                  ✅ Shapefiles, CSVs, and other individual files<br/>
+                  ✅ Multiple selection with Ctrl/Cmd
+                </p>
               </>
             )}
             
@@ -953,10 +992,12 @@ export const UploadForm: React.FC = () => {
             {isSubmitting ? (
               <div className="flex items-center">
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                Creating Zip...
+                {uploadMessage.includes('Creating') ? 'Creating Zip...' : 
+                 uploadMessage.includes('Uploading') ? 'Uploading...' : 
+                 'Processing...'}
               </div>
             ) : (
-              'Upload'
+              'Create & Upload'
             )}
           </button>
           {uploadMessage && (
@@ -982,6 +1023,13 @@ export const UploadForm: React.FC = () => {
           </p>
         </div>
 
+        {/* Enhanced Info Box */}
+        <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+          <p className="text-xs text-blue-700">
+            <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
+            The application will automatically include all files within the geodatabase while preserving the directory structure.
+          </p>
+        </div>
 
         {/* Audit Trail Info */}
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
