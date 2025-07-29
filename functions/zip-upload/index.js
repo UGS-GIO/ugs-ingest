@@ -9,11 +9,11 @@ const bucketName = 'stagedzips';
  * Cloud Function to upload zip files to GCS
  * HTTP Function that accepts multipart/form-data with zip file and metadata
  */
-functions.http('uploadZip', async (req, res) => {
+functions.http('ugs-zip-upload', async (req, res) => {
   // Set CORS headers
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Goog-Authenticated-User-Email');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Goog-Authenticated-User-Email, X-Filename');
 
   // Handle preflight requests
   if (req.method === 'OPTIONS') {

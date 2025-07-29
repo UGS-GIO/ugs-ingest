@@ -4,7 +4,7 @@
   "description": "Cloud Function to upload UGS dataset zips to GCS",
   "main": "index.js",
   "engines": {
-    "node": "18"
+    "node": "20"
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^3.3.0",
@@ -12,6 +12,6 @@
   },
   "scripts": {
     "start": "functions-framework --target=uploadZip",
-    "deploy": "gcloud functions deploy ugs-zip-upload --runtime nodejs18 --trigger-http --allow-unauthenticated --region us-central1 --memory 512MB --timeout 540s"
+    "deploy": "gcloud functions deploy ugs-zip-upload --runtime nodejs20 --trigger-http --allow-unauthenticated --region us-central1 --memory 512MB --timeout 540s"
   }
 }
