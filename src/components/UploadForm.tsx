@@ -870,7 +870,7 @@ export const UploadForm: React.FC = () => {
               </div>
             ) : (
               <>
-                <p className="mb-2">Drag & drop files or folders here (including .gdb), or</p>
+                <p className="mb-2">Drag & drop files or folders here or</p>
                 <button
                   type="button"
                   onClick={() => document.getElementById('file-input')?.click()}
@@ -878,11 +878,6 @@ export const UploadForm: React.FC = () => {
                 >
                   Choose Files
                 </button>
-                <p className="text-xs text-gray-500 mt-2">
-                  ✅ Supports File Geodatabases (.gdb folders)<br/>
-                  ✅ Shapefiles, CSVs, and other individual files<br/>
-                  ✅ Multiple selection with Ctrl/Cmd
-                </p>
               </>
             )}
             
@@ -987,13 +982,6 @@ export const UploadForm: React.FC = () => {
           </p>
         </div>
 
-        {/* Enhanced Info Box */}
-        <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
-          <p className="text-xs text-blue-700">
-            <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
-            The application will automatically include all files within the geodatabase while preserving the directory structure.
-          </p>
-        </div>
 
         {/* Audit Trail Info */}
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
