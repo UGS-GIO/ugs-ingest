@@ -2,7 +2,27 @@ import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
 
-// Define the shape of our form data
+// Type definitions for File System Access API
+interface FileSystemHandle {
+  kind: 'file' | 'directory';
+  name: string;
+}
+
+interface FileSystemFileHandle extends FileSystemHandle {
+  kind: 'file';
+  getFile(): Promise<File>;
+}
+
+interface FileSystemDirectoryHandle extends FileSystemHandle {
+  kind: 'directory';
+  entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+}
+
+declare global {
+  interface Window {
+    showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
+  }
+}
 interface FormData {
   // Original fields
   projectName: string;
@@ -294,6 +314,54 @@ export const UploadForm: React.FC = () => {
       // Reset the input so the same files can be selected again if needed
       e.target.value = '';
     }
+  };
+
+  // Handle folder selection using File System Access API
+  const handleFolderSelect = async () => {
+    try {
+      // Check if the browser supports the File System Access API
+      if ('showDirectoryPicker' in window) {
+        const dirHandle = await window.showDirectoryPicker();
+        setIsProcessingFolders(true);
+        
+        const files = await readDirectoryHandle(dirHandle);
+        if (files.length > 0) {
+          addFiles(files);
+        }
+      } else {
+        alert('Folder selection is not supported in this browser. Please use drag & drop for .gdb folders.');
+      }
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        console.error('Error selecting folder:', error);
+        setUploadMessage('Error selecting folder. Please try drag & drop instead.');
+      }
+    } finally {
+      setIsProcessingFolders(false);
+    }
+  };
+
+  // Helper function to read directory using File System Access API
+  const readDirectoryHandle = async (dirHandle: FileSystemDirectoryHandle, path = ''): Promise<File[]> => {
+    const files: File[] = [];
+    
+    for await (const [name, handle] of dirHandle.entries()) {
+      const fullPath = path ? `${path}/${name}` : name;
+      
+      if (handle.kind === 'file') {
+        const file = await (handle as FileSystemFileHandle).getFile();
+        const fileWithPath = new File([file], fullPath, {
+          type: file.type,
+          lastModified: file.lastModified
+        });
+        files.push(fileWithPath);
+      } else if (handle.kind === 'directory') {
+        const subFiles = await readDirectoryHandle(handle as FileSystemDirectoryHandle, fullPath);
+        files.push(...subFiles);
+      }
+    }
+    
+    return files;
   };
 
   // Drag and Drop Handlers
@@ -905,13 +973,22 @@ export const UploadForm: React.FC = () => {
             ) : (
               <>
                 <p className="mb-2">Drag & drop files or folders here (including .gdb), or</p>
-                <button
-                  type="button"
-                  onClick={() => document.getElementById('file-input')?.click()}
-                  className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
-                >
-                  Choose Files
-                </button>
+                <div className="flex gap-2 justify-center">
+                  <button
+                    type="button"
+                    onClick={() => document.getElementById('file-input')?.click()}
+                    className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
+                  >
+                    Choose Files
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleFolderSelect}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200 text-base"
+                  >
+                    Choose Folder
+                  </button>
+                </div>
               </>
             )}
             
@@ -1017,7 +1094,6 @@ export const UploadForm: React.FC = () => {
             Optional fields will be omitted from filename if left empty.
           </p>
         </div>
-
 
         {/* Audit Trail Info */}
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
