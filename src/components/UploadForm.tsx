@@ -86,17 +86,25 @@ const publicationTypeOptions = [
   { value: 'other', label: 'Other' },
 ];
 
-// Domain options
+// Domain options (now includes schema option)
 const domainOptions = [
   { value: '', label: 'Select Domain' },
-  { value: 'hazards', label: 'Hazards' },
-  { value: 'groundwater', label: 'Groundwater' },
-  { value: 'wetlands', label: 'Wetlands' },
-  { value: 'geologic_maps', label: 'Geologic Maps' },
-  { value: 'energy_minerals', label: 'Energy & Minerals' },
-  { value: 'ccus', label: 'CCUS' },
+  { value: 'hazards', label: 'Hazards', schema: 'hazards' },
+  { value: 'groundwater', label: 'Groundwater', schema: 'groundwater' },
+  { value: 'wetlands', label: 'Wetlands', schema: 'wetlands' },
+  { value: 'geologic_maps', label: 'Geologic Maps', schema: 'mapping' },
+  { value: 'energy_minerals', label: 'Energy & Minerals', schema: 'emp' },
+  { value: 'ccus', label: 'CCUS', schema: 'ccus' },
+  { value: 'boreholes', label: 'Boreholes', schema: 'boreholes' },
+  { value: 'geochron', label: 'Geochronology', schema: 'geochron' },
   { value: 'custom', label: 'Other (specify)' },
 ];
+
+// Helper function to get schema from domain
+const getSchemaFromDomain = (domain: string): string => {
+  const domainOption = domainOptions.find(option => option.value === domain);
+  return domainOption?.schema || 'mapping'; // Default to mapping schema
+};
 
 // Load type options
 const loadTypeOptions = [
@@ -565,131 +573,55 @@ export const UploadForm: React.FC = () => {
   // PostgREST configuration
   const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
 
-  // Fetch available tables from PostgREST by discovering them dynamically
-  const fetchAvailableTables = async (): Promise<TableInfo[]> => {
+  // Fetch available tables from PostgREST using Accept-Profile header for specific schema
+  const fetchAvailableTables = async (schemaName?: string): Promise<TableInfo[]> => {
     try {
-      // Known schemas in your database
-      const knownSchemas = ['mapping', 'boreholes', 'emp', 'geochron', 'hazards', 'wetlands'];
+      const schema = schemaName || 'mapping'; // Default to mapping schema
+      console.log(`🔍 Discovering tables in schema: ${schema}`);
+
+      // Use Accept-Profile header to specify which schema to query
+      const headers: Record<string, string> = {
+        'Accept-Profile': schema
+      };
+
+      // Get the OpenAPI spec for the specified schema
+      const apiResponse = await fetch(`${POSTGREST_URL}/`, { headers });
+      
+      if (!apiResponse.ok) {
+        throw new Error(`Failed to fetch API spec for schema ${schema}: ${apiResponse.statusText}`);
+      }
+
+      const apiSpec = await apiResponse.json();
+      const paths = apiSpec.paths || {};
+      
+      // Extract table names from paths (excluding /rpc/ endpoints)
+      const tableNames = Object.keys(paths)
+        .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
+        .map(path => path.substring(1)); // Remove leading slash
+      
+      console.log(`📋 Discovered tables in ${schema}:`, tableNames);
+      
       const availableTables: TableInfo[] = [];
 
-      // Method 1: Try to get the OpenAPI spec and extract all exposed endpoints
-      try {
-        const apiResponse = await fetch(`${POSTGREST_URL}/`);
-        if (apiResponse.ok) {
-          const apiSpec = await apiResponse.json();
-          const paths = apiSpec.paths || {};
-          
-          // Extract table names from paths (excluding /rpc/ endpoints)
-          const tableNames = Object.keys(paths)
-            .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
-            .map(path => path.substring(1)); // Remove leading slash
-          
-          console.log('Discovered tables from API:', tableNames);
-          
-          // Test each discovered table
-          for (const tableName of tableNames) {
-            try {
-              const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`);
-              if (testResponse.ok) {
-                // Try to determine which schema this table belongs to
-                let schema = 'mapping'; // default
-                
-                // Check if table name contains schema hint
-                for (const knownSchema of knownSchemas) {
-                  if (tableName.toLowerCase().includes(knownSchema.toLowerCase()) || 
-                      tableName.startsWith(`${knownSchema}_`)) {
-                    schema = knownSchema;
-                    break;
-                  }
-                }
-                
-                availableTables.push({
-                  schema: schema,
-                  name: tableName,
-                  fullName: `${schema}.${tableName}`,
-                  displayName: `${schema}.${tableName}`
-                });
-                
-                console.log(`✅ Table accessible: ${schema}.${tableName}`);
-              }
-            } catch (error) {
-              console.log(`❌ Error testing table ${tableName}:`, error);
-            }
+      // Test each discovered table for accessibility
+      for (const tableName of tableNames) {
+        try {
+          const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`, { headers });
+          if (testResponse.ok) {
+            availableTables.push({
+              schema: schema,
+              name: tableName,
+              fullName: `${schema}.${tableName}`,
+              displayName: `${schema}.${tableName}`
+            });
+            console.log(`✅ Table accessible: ${schema}.${tableName}`);
           }
-        }
-      } catch (error) {
-        console.log('Could not fetch API spec:', error);
-      }
-
-      // Method 2: If we didn't find any tables, try some common patterns
-      if (availableTables.length === 0) {
-        console.log('Trying common table name patterns...');
-        
-        const commonTablePatterns = [
-          // Schema-prefixed patterns
-          'hazards_quaternary_faults', 'hazards_landslides', 'hazards_earthquakes',
-          'wetlands_inventory', 'wetlands_boundaries', 'wetlands_functions',
-          'boreholes_locations', 'boreholes_lithology', 'boreholes_stratigraphy',
-          'geochron_samples', 'geochron_ages', 'geochron_methods',
-          'emp_oil_gas', 'emp_minerals', 'emp_coal',
-          // Direct table names (if exposed without prefix)
-          'quaternary_faults', 'landslides', 'earthquakes',
-          'wetland_inventory', 'borehole_locations', 'samples'
-        ];
-
-        for (const tableName of commonTablePatterns) {
-          try {
-            const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`);
-            if (testResponse.ok) {
-              // Determine schema from table name
-              let schema = 'mapping';
-              for (const knownSchema of knownSchemas) {
-                if (tableName.startsWith(`${knownSchema}_`)) {
-                  schema = knownSchema;
-                  break;
-                }
-              }
-              
-              availableTables.push({
-                schema: schema,
-                name: tableName,
-                fullName: `${schema}.${tableName}`,
-                displayName: `${schema}.${tableName.replace(`${schema}_`, '')}`
-              });
-              
-              console.log(`✅ Found table: ${schema}.${tableName}`);
-            }
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          } catch (error) {
-            // Silently continue - expected for non-existent tables
-          }
+        } catch (error) {
+          console.log(`❌ Error testing table ${tableName}:`, error);
         }
       }
 
-      // Method 3: Always include the known working tables from the mapping schema
-      const knownMappingTables = ['seamlessgeolunits', 'seamlessgeollines'];
-      for (const tableName of knownMappingTables) {
-        // Check if we already found this table
-        if (!availableTables.some(t => t.name === tableName)) {
-          try {
-            const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`);
-            if (testResponse.ok) {
-              availableTables.push({
-                schema: 'mapping',
-                name: tableName,
-                fullName: `mapping.${tableName}`,
-                displayName: `mapping.${tableName}`
-              });
-              console.log(`✅ Added known table: mapping.${tableName}`);
-            }
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          } catch (error) {
-            console.log(`❌ Known table not accessible: ${tableName}`);
-          }
-        }
-      }
-
-      console.log(`Found ${availableTables.length} total accessible tables`);
+      console.log(`Found ${availableTables.length} accessible tables in ${schema} schema`);
       return availableTables;
 
     } catch (error) {
@@ -756,21 +688,26 @@ export const UploadForm: React.FC = () => {
       reader.readAsText(file);
     });
   };
-  // Fetch column schema for a specific table using OpenAPI definitions
-  const fetchTableSchema = async (_schema: string, tableName: string): Promise<ColumnInfo[]> => {
+  // Fetch column schema for a specific table using Accept-Profile header
+  const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
     try {
-      // Get the OpenAPI spec to extract column definitions
-      const response = await fetch(`${POSTGREST_URL}/`);
+      // Use Accept-Profile header to specify which schema to query
+      const headers: Record<string, string> = {
+        'Accept-Profile': schema
+      };
+
+      // Get the OpenAPI spec to extract column definitions for the specific schema
+      const response = await fetch(`${POSTGREST_URL}/`, { headers });
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch API spec: ${response.statusText}`);
+        throw new Error(`Failed to fetch API spec for schema ${schema}: ${response.statusText}`);
       }
       
       const apiSpec = await response.json();
       const definitions = apiSpec.definitions;
       
       if (!definitions[tableName]) {
-        throw new Error(`Table ${tableName} not found in API definitions`);
+        throw new Error(`Table ${tableName} not found in ${schema} schema definitions`);
       }
       
       const tableDefinition = definitions[tableName];
@@ -786,6 +723,8 @@ export const UploadForm: React.FC = () => {
           else if (columnDef.format.includes('geometry')) dataType = 'geometry';
           else if (columnDef.format.includes('date')) dataType = 'date';
           else if (columnDef.format.includes('character')) dataType = 'text';
+          else if (columnDef.format.includes('numeric')) dataType = 'numeric';
+          else if (columnDef.format.includes('boolean')) dataType = 'boolean';
         }
         
         const isRequired = tableDefinition.required?.includes(columnName) || false;
@@ -799,10 +738,11 @@ export const UploadForm: React.FC = () => {
         };
       });
       
+      console.log(`📋 Schema for ${schema}.${tableName}:`, columns.map(c => `${c.name} (${c.dataType})`));
       return columns;
       
     } catch (error) {
-      console.error('Error fetching table schema:', error);
+      console.error(`Error fetching schema for ${schema}.${tableName}:`, error);
       return [];
     }
   };
@@ -875,11 +815,20 @@ export const UploadForm: React.FC = () => {
 
     setIsProcessingFolders(true);
     try {
-      // 1. Fetch available tables
-      const tables = await fetchAvailableTables();
+      // 1. Get schema from the selected domain
+      const schemaToUse = getSchemaFromDomain(formData.domain);
+      console.log(`🎯 Using schema "${schemaToUse}" for domain "${formData.domain}"`);
+      
+      // 2. Fetch available tables using the domain's schema
+      const tables = await fetchAvailableTables(schemaToUse);
       setAvailableTables(tables);
       
-      // 2. Analyze uploaded files for column names
+      if (tables.length === 0) {
+        setUploadMessage(`No accessible tables found in the ${schemaToUse} schema. Please check the schema configuration.`);
+        return;
+      }
+      
+      // 3. Analyze uploaded files for column names
       const columns = await analyzeFileColumns(formData.selectedFiles);
       setSourceColumns(columns);
       
@@ -888,7 +837,7 @@ export const UploadForm: React.FC = () => {
         return;
       }
       
-      // 3. Show schema mapping interface
+      // 4. Show schema mapping interface
       setShowSchemaMapping(true);
       
     } catch (error) {
