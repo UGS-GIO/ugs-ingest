@@ -2,7 +2,43 @@ import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
 
-// Define the shape of our form data
+// Type definitions for File System Access API
+interface FileSystemHandle {
+  kind: 'file' | 'directory';
+  name: string;
+}
+
+interface FileSystemFileHandle extends FileSystemHandle {
+  kind: 'file';
+  getFile(): Promise<File>;
+}
+
+interface FileSystemDirectoryHandle extends FileSystemHandle {
+  kind: 'directory';
+  entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+}
+
+// Types for schema validation
+interface TableInfo {
+  schema: string;
+  name: string;
+  fullName: string;
+  displayName: string;
+}
+
+interface ColumnInfo {
+  name: string;
+  dataType: string;
+  isNullable: boolean;
+  defaultValue: string | null;
+  position: number;
+}
+
+declare global {
+  interface Window {
+    showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
+  }
+}
 interface FormData {
   // Original fields
   projectName: string;
@@ -93,12 +129,23 @@ export const UploadForm: React.FC = () => {
     loadType: '',
   });
 
+  // State for schema validation
+  const [selectedTable, setSelectedTable] = useState<string>('');
+  const [showSchemaMapping, setShowSchemaMapping] = useState<boolean>(false);
+  const [sourceColumns, setSourceColumns] = useState<string[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [targetColumns, setTargetColumns] = useState<ColumnInfo[]>([]);
+  const [columnMapping, setColumnMapping] = useState<{[key: string]: string}>({});
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [availableTables, setAvailableTables] = useState<TableInfo[]>([]);
+
   // State for validation errors
   const [errors, setErrors] = useState<FormErrors>({});
   const [uploadMessage, setUploadMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [generatedFilename, setGeneratedFilename] = useState<string>('');
+  const [isProcessingFolders, setIsProcessingFolders] = useState<boolean>(false);
 
   // Update author name when email is loaded
   useEffect(() => {
@@ -167,6 +214,104 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+
+
+  // Enhanced function to handle both files and folders
+  const processDataTransferItems = async (items: DataTransferItemList): Promise<File[]> => {
+    const files: File[] = [];
+    const promises: Promise<void>[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      
+      if (item.kind === 'file') {
+        const entry = item.webkitGetAsEntry?.();
+        
+        if (entry) {
+          if (entry.isFile) {
+            // Handle regular files
+            promises.push(
+              new Promise<void>((resolve) => {
+                (entry as FileSystemFileEntry).file((file) => {
+                  files.push(file);
+                  resolve();
+                });
+              })
+            );
+          } else if (entry.isDirectory) {
+            // Handle directories (like .gdb folders)
+            promises.push(
+              readDirectoryEntry(entry as FileSystemDirectoryEntry, entry.name)
+                .then((dirFiles) => {
+                  files.push(...dirFiles);
+                })
+                .catch((error) => {
+                  console.warn('Error reading directory:', entry.name, error);
+                })
+            );
+          }
+        } else {
+          // Fallback for browsers that don't support webkitGetAsEntry
+          const file = item.getAsFile();
+          if (file) {
+            files.push(file);
+          }
+        }
+      }
+    }
+
+    await Promise.all(promises);
+    return files;
+  };
+
+  // Helper function to read directory entries (for older API)
+  const readDirectoryEntry = async (dirEntry: FileSystemDirectoryEntry, basePath = ''): Promise<File[]> => {
+    return new Promise((resolve, reject) => {
+      const files: File[] = [];
+      const reader = dirEntry.createReader();
+      
+      const readEntries = () => {
+        reader.readEntries(async (entries) => {
+          if (entries.length === 0) {
+            resolve(files);
+            return;
+          }
+          
+          const promises = entries.map((entry) => {
+            return new Promise<void>((entryResolve) => {
+              const fullPath = basePath ? `${basePath}/${entry.name}` : entry.name;
+              
+              if (entry.isFile) {
+                (entry as FileSystemFileEntry).file((file) => {
+                  const fileWithPath = new File([file], fullPath, {
+                    type: file.type,
+                    lastModified: file.lastModified
+                  });
+                  files.push(fileWithPath);
+                  entryResolve();
+                });
+              } else if (entry.isDirectory) {
+                readDirectoryEntry(entry as FileSystemDirectoryEntry, fullPath)
+                  .then((subFiles) => {
+                    files.push(...subFiles);
+                    entryResolve();
+                  })
+                  .catch(() => entryResolve());
+              } else {
+                entryResolve();
+              }
+            });
+          });
+          
+          await Promise.all(promises);
+          readEntries(); // Continue reading if there are more entries
+        }, reject);
+      };
+      
+      readEntries();
+    });
+  };
+
   // Add files to selection
   const addFiles = (newFiles: File[]) => {
     setFormData((prevData) => ({
@@ -197,6 +342,116 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+  // Unified handler for both files and folders
+  const handleFileOrFolderSelect = async () => {
+    // First, try the folder picker if available
+    if ('showDirectoryPicker' in window) {
+      try {
+        const choice = await new Promise<'files' | 'folder' | 'cancel'>((resolve) => {
+          const modal = document.createElement('div');
+          modal.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+            z-index: 10000; font-family: system-ui, -apple-system, sans-serif;
+          `;
+          
+          modal.innerHTML = `
+            <div style="background: white; padding: 24px; border-radius: 8px; max-width: 400px; text-align: center;">
+              <h3 style="margin: 0 0 16px 0; color: #333;">Select Files or Folder</h3>
+              <p style="margin: 0 0 20px 0; color: #666; font-size: 14px;">
+                Choose individual files or select an entire folder (like .gdb)
+              </p>
+              <div style="display: flex; gap: 12px; justify-content: center;">
+                <button id="select-files" style="
+                  padding: 8px 16px; background: #6b7280; color: white; border: none; 
+                  border-radius: 6px; cursor: pointer; font-size: 14px;
+                ">Individual Files</button>
+                <button id="select-folder" style="
+                  padding: 8px 16px; background: #2563eb; color: white; border: none; 
+                  border-radius: 6px; cursor: pointer; font-size: 14px;
+                ">Folder (.gdb)</button>
+                <button id="cancel" style="
+                  padding: 8px 16px; background: #e5e7eb; color: #374151; border: none; 
+                  border-radius: 6px; cursor: pointer; font-size: 14px;
+                ">Cancel</button>
+              </div>
+            </div>
+          `;
+          
+          document.body.appendChild(modal);
+          
+          modal.querySelector('#select-files')?.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('files');
+          });
+          
+          modal.querySelector('#select-folder')?.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('folder');
+          });
+          
+          modal.querySelector('#cancel')?.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('cancel');
+          });
+          
+          // Close on background click
+          modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+              document.body.removeChild(modal);
+              resolve('cancel');
+            }
+          });
+        });
+        
+        if (choice === 'folder') {
+          const dirHandle = await window.showDirectoryPicker();
+          setIsProcessingFolders(true);
+          const files = await readDirectoryHandle(dirHandle);
+          if (files.length > 0) {
+            addFiles(files);
+          }
+          setIsProcessingFolders(false);
+        } else if (choice === 'files') {
+          document.getElementById('file-input')?.click();
+        }
+        
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          console.error('Error selecting folder:', error);
+          // Fallback to file picker
+          document.getElementById('file-input')?.click();
+        }
+      }
+    } else {
+      // If folder picker not supported, just use file picker
+      document.getElementById('file-input')?.click();
+    }
+  };
+
+  // Helper function to read directory using File System Access API
+  const readDirectoryHandle = async (dirHandle: FileSystemDirectoryHandle, path = ''): Promise<File[]> => {
+    const files: File[] = [];
+    
+    for await (const [name, handle] of dirHandle.entries()) {
+      const fullPath = path ? `${path}/${name}` : name;
+      
+      if (handle.kind === 'file') {
+        const file = await (handle as FileSystemFileHandle).getFile();
+        const fileWithPath = new File([file], fullPath, {
+          type: file.type,
+          lastModified: file.lastModified
+        });
+        files.push(fileWithPath);
+      } else if (handle.kind === 'directory') {
+        const subFiles = await readDirectoryHandle(handle as FileSystemDirectoryHandle, fullPath);
+        files.push(...subFiles);
+      }
+    }
+    
+    return files;
+  };
+
   // Drag and Drop Handlers
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -208,13 +463,29 @@ export const UploadForm: React.FC = () => {
     setIsDragging(false);
   };
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+  const handleDrop = async (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const newFiles = Array.from(e.dataTransfer.files);
-      addFiles(newFiles);
+    setIsProcessingFolders(true);
+    
+    try {
+      if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        // Use the enhanced function to handle both files and folders
+        const newFiles = await processDataTransferItems(e.dataTransfer.items);
+        if (newFiles.length > 0) {
+          addFiles(newFiles);
+        }
+      } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        // Fallback for older browsers
+        const newFiles = Array.from(e.dataTransfer.files);
+        addFiles(newFiles);
+      }
       e.dataTransfer.clearData();
+    } catch (error) {
+      console.error('Error processing dropped items:', error);
+      setUploadMessage('Error processing dropped files/folders. Please try again.');
+    } finally {
+      setIsProcessingFolders(false);
     }
   };
 
@@ -251,6 +522,17 @@ export const UploadForm: React.FC = () => {
       totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
       zipFilename: generatedFilename,
       
+      // Schema validation and mapping (if applicable)
+      schemaValidation: formData.loadType !== 'full' ? {
+        targetTable: selectedTable,
+        sourceColumns: sourceColumns,
+        columnMapping: columnMapping,
+        validationCompleted: showSchemaMapping ? false : Object.keys(columnMapping).length > 0
+      } : null,
+      containsGeodatabase: formData.selectedFiles.some(file => 
+        file.name.includes('.gdb/') || file.name.endsWith('.gdb')
+      ),
+      
       // Audit trail
       userAgent: navigator.userAgent,
       uploadSource: 'UGS Ingest Web Application',
@@ -280,7 +562,201 @@ export const UploadForm: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  // Create zip file with data and metadata
+  // PostgREST configuration
+  const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
+
+  // Fetch available tables from PostgREST (hardcoded based on available endpoints)
+  const fetchAvailableTables = async (): Promise<TableInfo[]> => {
+    try {
+      // Since PostgREST only exposes specific tables, we'll hardcode the known ones
+      // Based on the API documentation, we have these tables available:
+      const availableTables = [
+        {
+          schema: 'public',
+          name: 'seamlessgeolunits',
+          fullName: 'public.seamlessgeolunits',
+          displayName: 'public.seamlessgeolunits (Geological Units)'
+        },
+        {
+          schema: 'public',
+          name: 'seamlessgeollines',
+          fullName: 'public.seamlessgeollines',
+          displayName: 'public.seamlessgeollines (Geological Lines)'
+        }
+      ];
+
+      // Test if the tables are actually accessible
+      for (const table of availableTables) {
+        try {
+          const testResponse = await fetch(`${POSTGREST_URL}/${table.name}?limit=1&select=*`);
+          if (!testResponse.ok) {
+            console.warn(`Table ${table.name} not accessible:`, testResponse.statusText);
+          }
+        } catch (error) {
+          console.warn(`Error testing table ${table.name}:`, error);
+        }
+      }
+
+      return availableTables;
+    } catch (error) {
+      console.error('Error fetching tables:', error);
+      return [];
+    }
+  };
+
+  // Analyze files to extract column names
+  const analyzeFileColumns = async (files: File[]): Promise<string[]> => {
+    const allColumns = new Set<string>();
+
+    for (const file of files) {
+      try {
+        if (file.name.toLowerCase().endsWith('.csv')) {
+          const columns = await analyzeCsvColumns(file);
+          columns.forEach(col => allColumns.add(col));
+        } else if (file.name.toLowerCase().endsWith('.dbf')) {
+          // DBF files from shapefiles - would need a DBF parser
+          console.log('DBF file detected:', file.name);
+          // For now, we'll handle this in the mapping UI
+        } else if (file.name.includes('.gdb/')) {
+          // File geodatabase files - these are complex, skip for now
+          console.log('GDB file detected:', file.name);
+        }
+      } catch (error) {
+        console.error('Error analyzing file:', file.name, error);
+      }
+    }
+
+    return Array.from(allColumns);
+  };
+
+  // Analyze CSV file to get column headers
+  const analyzeCsvColumns = async (file: File): Promise<string[]> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const firstLine = text.split('\n')[0];
+          // Handle different CSV delimiters
+          const delimiters = [',', '\t', ';', '|'];
+          let columns: string[] = [];
+          
+          for (const delimiter of delimiters) {
+            const testColumns = firstLine.split(delimiter);
+            if (testColumns.length > columns.length) {
+              columns = testColumns;
+            }
+          }
+          
+          // Clean column names
+          const cleanColumns = columns.map(col => 
+            col.trim().replace(/^["']|["']$/g, '') // Remove quotes
+          ).filter(col => col.length > 0);
+          
+          resolve(cleanColumns);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  };
+  // Fetch column schema for a specific table by making a test query
+  const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
+    try {
+      // Since we can't access information_schema, we'll make a test query to get column info
+      // This gets the first row with all columns to infer the schema
+      const response = await fetch(`${POSTGREST_URL}/${tableName}?limit=1&select=*`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch table data: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      if (!Array.isArray(data) || data.length === 0) {
+        // If no data, make a request that will show us the column structure in the error or response
+        const headResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0&select=*`);
+        const emptyData = await headResponse.json();
+        
+        // If we get an empty array, we can't determine structure this way
+        if (Array.isArray(emptyData)) {
+          return [];
+        }
+      }
+      
+      // Get the first row to examine column structure
+      const firstRow = Array.isArray(data) && data.length > 0 ? data[0] : {};
+      
+      // Convert object keys to column info
+      const columns: ColumnInfo[] = Object.keys(firstRow).map((columnName, index) => {
+        const value = firstRow[columnName];
+        let dataType = 'text'; // default
+        
+        // Infer type from value
+        if (value === null) {
+          dataType = 'text'; // can't determine from null
+        } else if (typeof value === 'number') {
+          dataType = Number.isInteger(value) ? 'integer' : 'numeric';
+        } else if (typeof value === 'boolean') {
+          dataType = 'boolean';
+        } else if (typeof value === 'string') {
+          // Check if it looks like a date
+          if (value.match(/^\d{4}-\d{2}-\d{2}/)) {
+            dataType = 'date';
+          } else {
+            dataType = 'text';
+          }
+        }
+        
+        return {
+          name: columnName,
+          dataType: dataType,
+          isNullable: true, // We can't determine this from sample data
+          defaultValue: null,
+          position: index + 1
+        };
+      });
+      
+      return columns;
+      
+    } catch (error) {
+      console.error('Error fetching table schema:', error);
+      return [];
+    }
+  };
+  const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
+    try {
+      const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
+      
+      console.log('Uploading to Cloud Function:', functionUrl);
+      console.log('Filename:', filename);
+      console.log('Zip size:', zipBlob.size, 'bytes');
+
+      const response = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/zip',
+          'X-Filename': filename,
+        },
+        body: zipBlob,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Upload failed: ${errorData.error || response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Upload successful:', result);
+      return true;
+
+    } catch (error) {
+      console.error('❌ Upload to GCS failed:', error);
+      throw error;
+    }
+  };
   const createZipFile = async (): Promise<Blob> => {
     // Import JSZip dynamically to avoid SSR issues
     const JSZip = (await import('jszip')).default;
@@ -294,7 +770,7 @@ export const UploadForm: React.FC = () => {
     // Add metadata file
     zip.file('metadata.json', metadataJson);
     
-    // Add the original data files in a data folder
+    // Add the original data files in a data folder, preserving directory structure
     formData.selectedFiles.forEach((file) => {
       zip.file(`data/${file.name}`, file);
     });
@@ -309,7 +785,63 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  // Handle form submission
+  // Start schema validation process
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const startSchemaValidation = async () => {
+    if (formData.selectedFiles.length === 0) {
+      setUploadMessage('Please select files before validating schema.');
+      return;
+    }
+
+    setIsProcessingFolders(true);
+    try {
+      // 1. Fetch available tables
+      const tables = await fetchAvailableTables();
+      setAvailableTables(tables);
+      
+      // 2. Analyze uploaded files for column names
+      const columns = await analyzeFileColumns(formData.selectedFiles);
+      setSourceColumns(columns);
+      
+      if (columns.length === 0) {
+        setUploadMessage('Could not detect column names from uploaded files. You may need to upload CSV files or files with detectable schemas.');
+        return;
+      }
+      
+      // 3. Show schema mapping interface
+      setShowSchemaMapping(true);
+      
+    } catch (error) {
+      console.error('Schema validation error:', error);
+      setUploadMessage('Error during schema validation. Please try again.');
+    } finally {
+      setIsProcessingFolders(false);
+    }
+  };
+
+  // Handle target table selection
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleTableSelection = async (tableFullName: string) => {
+    setSelectedTable(tableFullName);
+    
+    if (tableFullName) {
+      const [schema, tableName] = tableFullName.split('.');
+      const columns = await fetchTableSchema(schema, tableName);
+      setTargetColumns(columns);
+      
+      // Initialize mapping - try to auto-match columns with same names
+      const newMapping: {[key: string]: string} = {};
+      sourceColumns.forEach(sourceCol => {
+        const matchingTarget = columns.find((targetCol: ColumnInfo) => 
+          targetCol.name.toLowerCase() === sourceCol.toLowerCase()
+        );
+        if (matchingTarget) {
+          newMapping[sourceCol] = matchingTarget.name;
+        }
+      });
+      setColumnMapping(newMapping);
+    }
+  };
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setUploadMessage('');
@@ -322,17 +854,19 @@ export const UploadForm: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      // Create zip file with data and metadata
+      // Step 1: Create zip file with data and metadata
+      setUploadMessage('Creating zip file...');
       const zipBlob = await createZipFile();
       
       console.log('Generated filename:', generatedFilename);
       console.log('Zip file created with size:', zipBlob.size);
-      console.log('Metadata:', generateMetadata());
 
-      // Simulate processing time
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Step 2: Upload to GCS
+      setUploadMessage('Uploading to cloud storage...');
+      await uploadZipToGCS(zipBlob, generatedFilename);
 
-      setUploadMessage(`Zip file "${generatedFilename}" created successfully and ready for upload!`);
+      // Step 3: Success!
+      setUploadMessage(`✅ Upload successful! File "${generatedFilename}" has been uploaded to cloud storage.`);
       
       // Reset form after successful submission
       setFormData({
@@ -360,11 +894,31 @@ export const UploadForm: React.FC = () => {
       }
 
     } catch (error) {
-      console.error('Processing failed:', error);
-      setUploadMessage('An error occurred during processing. Please try again.');
+      console.error('Upload process failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setUploadMessage(`❌ Upload failed: ${errorMessage}. Please try again.`);
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Helper function to group files by directory for better display
+  const groupFilesByDirectory = (files: File[]) => {
+    const groups: { [key: string]: File[] } = {};
+    
+    files.forEach(file => {
+      const pathParts = file.name.split('/');
+      if (pathParts.length > 1) {
+        const directory = pathParts[0];
+        if (!groups[directory]) groups[directory] = [];
+        groups[directory].push(file);
+      } else {
+        if (!groups['Files']) groups['Files'] = [];
+        groups['Files'].push(file);
+      }
+    });
+    
+    return groups;
   };
 
   // Loading state
@@ -410,6 +964,8 @@ export const UploadForm: React.FC = () => {
       </div>
     );
   }
+
+  const fileGroups = groupFilesByDirectory(formData.selectedFiles);
 
   // Main form (authenticated users only)
   return (
@@ -691,11 +1247,11 @@ export const UploadForm: React.FC = () => {
         {/* File Upload Section */}
         <div className="mb-6">
           <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
-            Data File
+            Data Files
           </h3>
           
           <label htmlFor="file-input" className="block text-gray-700 font-semibold mb-2">
-            Select Data Files: <span className="text-red-500">*</span>
+            Select Data Files or Folders: <span className="text-red-500">*</span>
           </label>
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center text-gray-500 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center min-h-[150px] ${
@@ -722,17 +1278,29 @@ export const UploadForm: React.FC = () => {
                 <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
-            <p className="mb-2">Drag & drop multiple files here, or</p>
-            <button
-              type="button"
-              onClick={() => document.getElementById('file-input')?.click()}
-              className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
-            >
-              Choose Files
-            </button>
-            <p className="text-xs text-gray-500 mt-2">
-              Hold Ctrl (Windows) or Cmd (Mac) to select multiple files
-            </p>
+            {isProcessingFolders ? (
+              <div className="flex items-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
+                <p>Processing folders...</p>
+              </div>
+            ) : (
+              <>
+                <p className="mb-2">Drag & drop files or folders here (including .gdb), or</p>
+                <button
+                  type="button"
+                  onClick={handleFileOrFolderSelect}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200 text-base"
+                >
+                  Choose Files or Folder
+                </button>
+                <p className="text-xs text-gray-500 mt-2">
+                  ✅ Supports File Geodatabases (.gdb folders)<br/>
+                  ✅ Shapefiles, CSVs, and other individual files<br/>
+                  ✅ Multiple selection with Ctrl/Cmd<br/>
+                  💡 Button will ask whether you want files or folders
+                </p>
+              </>
+            )}
             
             {/* Selected Files Display */}
             {formData.selectedFiles.length > 0 && (
@@ -741,29 +1309,50 @@ export const UploadForm: React.FC = () => {
                   <p className="font-bold text-green-800 mb-2">
                     Selected Files ({formData.selectedFiles.length}):
                   </p>
-                  <div className="max-h-32 overflow-y-auto space-y-2">
-                    {formData.selectedFiles.map((file, index) => (
-                      <div key={index} className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded-md">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-green-800 truncate">{file.name}</p>
-                          <p className="text-xs text-green-600">
-                            {(file.size / 1024 / 1024).toFixed(2)} MB
-                          </p>
+                  <div className="max-h-64 overflow-y-auto space-y-3">
+                    {Object.entries(fileGroups).map(([groupName, files]) => (
+                      <div key={groupName} className="border border-green-200 rounded-md">
+                        <div className="bg-green-100 px-3 py-2 border-b border-green-200">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-green-800">
+                              {groupName.endsWith('.gdb') ? `📁 ${groupName} (File Geodatabase)` : `📁 ${groupName}`}
+                            </span>
+                            <span className="text-sm text-green-600">
+                              {files.length} file{files.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => removeFile(index)}
-                          className="ml-2 p-1 text-red-500 hover:text-red-700 hover:bg-red-100 rounded"
-                          title="Remove file"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                          </svg>
-                        </button>
+                        <div className="max-h-32 overflow-y-auto">
+                          {files.map((file, fileIndex) => {
+                            const globalIndex = formData.selectedFiles.indexOf(file);
+                            return (
+                              <div key={fileIndex} className="flex items-center justify-between p-2 border-b border-green-100 last:border-b-0 hover:bg-green-50">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm text-green-800 truncate">
+                                    {file.name.includes('/') ? file.name.split('/').pop() : file.name}
+                                  </p>
+                                  <p className="text-xs text-green-600">
+                                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => removeFile(globalIndex)}
+                                  className="ml-2 p-1 text-red-500 hover:text-red-700 hover:bg-red-100 rounded"
+                                  title="Remove file"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                                  </svg>
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     ))}
                   </div>
-                  <div className="mt-2 pt-2 border-t border-green-200">
+                  <div className="mt-3 pt-2 border-t border-green-200">
                     <p className="text-sm text-green-600">
                       Total Size: {(formData.selectedFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024).toFixed(2)} MB
                     </p>
@@ -779,16 +1368,20 @@ export const UploadForm: React.FC = () => {
         <div className="flex items-center justify-between mt-8">
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || isProcessingFolders}
             className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 text-base font-semibold"
           >
             {isSubmitting ? (
               <div className="flex items-center">
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                Creating Zip...
+                {uploadMessage.includes('Creating') ? 'Creating Zip...' : 
+                 uploadMessage.includes('Uploading') ? 'Uploading...' : 
+                 'Processing...'}
               </div>
+            ) : formData.loadType !== 'full' ? (
+              'Validate Schema & Upload'
             ) : (
-              'Upload'
+              'Create & Upload'
             )}
           </button>
           {uploadMessage && (
@@ -811,6 +1404,14 @@ export const UploadForm: React.FC = () => {
           <p className="text-xs text-gray-600 mt-2">
             Required fields are marked with <span className="text-red-500">*</span>. 
             Optional fields will be omitted from filename if left empty.
+          </p>
+        </div>
+
+        {/* Enhanced Info Box */}
+        <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+          <p className="text-xs text-blue-700">
+            <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
+            The application will automatically include all files within the geodatabase while preserving the directory structure.
           </p>
         </div>
 
