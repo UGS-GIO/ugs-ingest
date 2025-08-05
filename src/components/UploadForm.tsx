@@ -1407,14 +1407,6 @@ export const UploadForm: React.FC = () => {
           </p>
         </div>
 
-        {/* Enhanced Info Box */}
-        <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
-          <p className="text-xs text-blue-700">
-            <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
-            The application will automatically include all files within the geodatabase while preserving the directory structure.
-          </p>
-        </div>
-
         {/* Audit Trail Info */}
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
           <p className="text-xs text-gray-600">
