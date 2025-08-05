@@ -1664,6 +1664,20 @@ export const UploadForm: React.FC = () => {
             <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
             The application will automatically include all files within the geodatabase while preserving the directory structure.
           </p>
+          {/* Development: Test table discovery */}
+          {process.env.NODE_ENV === 'development' && (
+            <button
+              type="button"
+              onClick={async () => {
+                console.log('🔍 Testing table discovery...');
+                const tables = await fetchAvailableTables();
+                console.log('📋 Discovered tables:', tables);
+              }}
+              className="mt-2 px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+            >
+              Test Table Discovery (Dev Only)
+            </button>
+          )}
         </div>
 
         {/* Audit Trail Info */}
