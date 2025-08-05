@@ -565,39 +565,133 @@ export const UploadForm: React.FC = () => {
   // PostgREST configuration
   const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
 
-  // Fetch available tables from PostgREST (hardcoded based on available endpoints)
+  // Fetch available tables from PostgREST by discovering them dynamically
   const fetchAvailableTables = async (): Promise<TableInfo[]> => {
     try {
-      // Since PostgREST only exposes specific tables, we'll hardcode the known ones
-      // Based on the API documentation, we have these tables available:
-      const availableTables = [
-        {
-          schema: 'public',
-          name: 'seamlessgeolunits',
-          fullName: 'public.seamlessgeolunits',
-          displayName: 'public.seamlessgeolunits (Geological Units)'
-        },
-        {
-          schema: 'public',
-          name: 'seamlessgeollines',
-          fullName: 'public.seamlessgeollines',
-          displayName: 'public.seamlessgeollines (Geological Lines)'
-        }
-      ];
+      // Known schemas in your database
+      const knownSchemas = ['mapping', 'boreholes', 'emp', 'geochron', 'hazards', 'wetlands'];
+      const availableTables: TableInfo[] = [];
 
-      // Test if the tables are actually accessible
-      for (const table of availableTables) {
-        try {
-          const testResponse = await fetch(`${POSTGREST_URL}/${table.name}?limit=1&select=*`);
-          if (!testResponse.ok) {
-            console.warn(`Table ${table.name} not accessible:`, testResponse.statusText);
+      // Method 1: Try to get the OpenAPI spec and extract all exposed endpoints
+      try {
+        const apiResponse = await fetch(`${POSTGREST_URL}/`);
+        if (apiResponse.ok) {
+          const apiSpec = await apiResponse.json();
+          const paths = apiSpec.paths || {};
+          
+          // Extract table names from paths (excluding /rpc/ endpoints)
+          const tableNames = Object.keys(paths)
+            .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
+            .map(path => path.substring(1)); // Remove leading slash
+          
+          console.log('Discovered tables from API:', tableNames);
+          
+          // Test each discovered table
+          for (const tableName of tableNames) {
+            try {
+              const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`);
+              if (testResponse.ok) {
+                // Try to determine which schema this table belongs to
+                let schema = 'mapping'; // default
+                
+                // Check if table name contains schema hint
+                for (const knownSchema of knownSchemas) {
+                  if (tableName.toLowerCase().includes(knownSchema.toLowerCase()) || 
+                      tableName.startsWith(`${knownSchema}_`)) {
+                    schema = knownSchema;
+                    break;
+                  }
+                }
+                
+                availableTables.push({
+                  schema: schema,
+                  name: tableName,
+                  fullName: `${schema}.${tableName}`,
+                  displayName: `${schema}.${tableName}`
+                });
+                
+                console.log(`✅ Table accessible: ${schema}.${tableName}`);
+              }
+            } catch (error) {
+              console.log(`❌ Error testing table ${tableName}:`, error);
+            }
           }
-        } catch (error) {
-          console.warn(`Error testing table ${table.name}:`, error);
+        }
+      } catch (error) {
+        console.log('Could not fetch API spec:', error);
+      }
+
+      // Method 2: If we didn't find any tables, try some common patterns
+      if (availableTables.length === 0) {
+        console.log('Trying common table name patterns...');
+        
+        const commonTablePatterns = [
+          // Schema-prefixed patterns
+          'hazards_quaternary_faults', 'hazards_landslides', 'hazards_earthquakes',
+          'wetlands_inventory', 'wetlands_boundaries', 'wetlands_functions',
+          'boreholes_locations', 'boreholes_lithology', 'boreholes_stratigraphy',
+          'geochron_samples', 'geochron_ages', 'geochron_methods',
+          'emp_oil_gas', 'emp_minerals', 'emp_coal',
+          // Direct table names (if exposed without prefix)
+          'quaternary_faults', 'landslides', 'earthquakes',
+          'wetland_inventory', 'borehole_locations', 'samples'
+        ];
+
+        for (const tableName of commonTablePatterns) {
+          try {
+            const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`);
+            if (testResponse.ok) {
+              // Determine schema from table name
+              let schema = 'mapping';
+              for (const knownSchema of knownSchemas) {
+                if (tableName.startsWith(`${knownSchema}_`)) {
+                  schema = knownSchema;
+                  break;
+                }
+              }
+              
+              availableTables.push({
+                schema: schema,
+                name: tableName,
+                fullName: `${schema}.${tableName}`,
+                displayName: `${schema}.${tableName.replace(`${schema}_`, '')}`
+              });
+              
+              console.log(`✅ Found table: ${schema}.${tableName}`);
+            }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (error) {
+            // Silently continue - expected for non-existent tables
+          }
         }
       }
 
+      // Method 3: Always include the known working tables from the mapping schema
+      const knownMappingTables = ['seamlessgeolunits', 'seamlessgeollines'];
+      for (const tableName of knownMappingTables) {
+        // Check if we already found this table
+        if (!availableTables.some(t => t.name === tableName)) {
+          try {
+            const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`);
+            if (testResponse.ok) {
+              availableTables.push({
+                schema: 'mapping',
+                name: tableName,
+                fullName: `mapping.${tableName}`,
+                displayName: `mapping.${tableName}`
+              });
+              console.log(`✅ Added known table: mapping.${tableName}`);
+            }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (error) {
+            console.log(`❌ Known table not accessible: ${tableName}`);
+          }
+        }
+      }
+
+      console.log(`Found ${availableTables.length} total accessible tables`);
       return availableTables;
+
     } catch (error) {
       console.error('Error fetching tables:', error);
       return [];
@@ -662,59 +756,45 @@ export const UploadForm: React.FC = () => {
       reader.readAsText(file);
     });
   };
-  // Fetch column schema for a specific table by making a test query
+  // Fetch column schema for a specific table using OpenAPI definitions
   const fetchTableSchema = async (_schema: string, tableName: string): Promise<ColumnInfo[]> => {
     try {
-      // Since we can't access information_schema, we'll make a test query to get column info
-      // This gets the first row with all columns to infer the schema
-      const response = await fetch(`${POSTGREST_URL}/${tableName}?limit=1&select=*`);
+      // Get the OpenAPI spec to extract column definitions
+      const response = await fetch(`${POSTGREST_URL}/`);
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch table data: ${response.statusText}`);
+        throw new Error(`Failed to fetch API spec: ${response.statusText}`);
       }
       
-      const data = await response.json();
+      const apiSpec = await response.json();
+      const definitions = apiSpec.definitions;
       
-      if (!Array.isArray(data) || data.length === 0) {
-        // If no data, make a request that will show us the column structure in the error or response
-        const headResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0&select=*`);
-        const emptyData = await headResponse.json();
-        
-        // If we get an empty array, we can't determine structure this way
-        if (Array.isArray(emptyData)) {
-          return [];
-        }
+      if (!definitions[tableName]) {
+        throw new Error(`Table ${tableName} not found in API definitions`);
       }
       
-      // Get the first row to examine column structure
-      const firstRow = Array.isArray(data) && data.length > 0 ? data[0] : {};
+      const tableDefinition = definitions[tableName];
+      const properties = tableDefinition.properties;
       
-      // Convert object keys to column info
-      const columns: ColumnInfo[] = Object.keys(firstRow).map((columnName, index) => {
-        const value = firstRow[columnName];
-        let dataType = 'text'; // default
-        
-        // Infer type from value
-        if (value === null) {
-          dataType = 'text'; // can't determine from null
-        } else if (typeof value === 'number') {
-          dataType = Number.isInteger(value) ? 'integer' : 'numeric';
-        } else if (typeof value === 'boolean') {
-          dataType = 'boolean';
-        } else if (typeof value === 'string') {
-          // Check if it looks like a date
-          if (value.match(/^\d{4}-\d{2}-\d{2}/)) {
-            dataType = 'date';
-          } else {
-            dataType = 'text';
-          }
+      // Convert properties to ColumnInfo format
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const columns: ColumnInfo[] = Object.entries(properties).map(([columnName, columnDef]: [string, any], index) => {
+        // Map PostgREST types to more readable types
+        let dataType = columnDef.type || 'string';
+        if (columnDef.format) {
+          if (columnDef.format.includes('integer')) dataType = 'integer';
+          else if (columnDef.format.includes('geometry')) dataType = 'geometry';
+          else if (columnDef.format.includes('date')) dataType = 'date';
+          else if (columnDef.format.includes('character')) dataType = 'text';
         }
+        
+        const isRequired = tableDefinition.required?.includes(columnName) || false;
         
         return {
           name: columnName,
           dataType: dataType,
-          isNullable: true, // We can't determine this from sample data
-          defaultValue: null,
+          isNullable: !isRequired,
+          defaultValue: columnDef.default || null,
           position: index + 1
         };
       });
