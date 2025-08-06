@@ -37,7 +37,6 @@ interface ColumnInfo {
 declare global {
   interface Window {
     showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
-    resolveManualColumns?: (columns: string[]) => void;
   }
 }
 
@@ -846,23 +845,6 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Prompt user to manually enter column names for geodatabase
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const promptForManualColumns = async (): Promise<string[]> => {
-    return new Promise((resolve) => {
-      setShowManualColumnInput(true);
-      
-      // Store resolve function to be called when modal is closed
-      window.resolveManualColumns = (columns: string[]) => {
-        setShowManualColumnInput(false);
-        setManualColumnInput('');
-        resolve(columns);
-        // Clean up the global reference after use
-        delete window.resolveManualColumns;
-      };
-    });
-  };
-
   // Handle manual column input submission
   const handleManualColumnSubmit = () => {
     const columns = manualColumnInput
@@ -870,16 +852,16 @@ export const UploadForm: React.FC = () => {
       .map(col => col.trim())
       .filter(col => col.length > 0);
     
-    if (window.resolveManualColumns) {
-      window.resolveManualColumns(columns);
-    }
+    // Set the source columns directly
+    setSourceColumns(columns);
+    setShowManualColumnInput(false);
+    setManualColumnInput('');
   };
 
   // Handle manual column input cancellation
   const handleManualColumnCancel = () => {
-    if (window.resolveManualColumns) {
-      window.resolveManualColumns([]);
-    }
+    setShowManualColumnInput(false);
+    setManualColumnInput('');
   };
 
   // Analyze CSV file to get column headers
