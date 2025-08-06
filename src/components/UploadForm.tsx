@@ -650,7 +650,7 @@ export const UploadForm: React.FC = () => {
         } else if (file.name.includes('.gdb/')) {
           console.log('GDB file detected:', file.name);
           // Try to extract columns from geodatabase files
-          const columns = await analyzeGdbColumns(files, file);
+          const columns = await analyzeGdbColumns(files);
           columns.forEach(col => allColumns.add(col));
         }
       } catch (error) {
@@ -662,7 +662,7 @@ export const UploadForm: React.FC = () => {
   };
 
   // Analyze geodatabase files to extract column names
-  const analyzeGdbColumns = async (allFiles: File[], currentFile: File): Promise<string[]> => {
+  const analyzeGdbColumns = async (allFiles: File[]): Promise<string[]> => {
     try {
       // Look for .gdbtable files which contain the actual data structure
       const gdbFiles = allFiles.filter(f => f.name.includes('.gdb/'));
@@ -679,17 +679,15 @@ export const UploadForm: React.FC = () => {
       const columns = new Set<string>();
       
       // Method 1: Look for common GDB column patterns in file names
-      const gdbPath = currentFile.name.substring(0, currentFile.name.lastIndexOf('/'));
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const relatedFiles = gdbFiles.filter(f => f.name.startsWith(gdbPath));
+      // const gdbPath = currentFile.name.substring(0, currentFile.name.lastIndexOf('/')); // Currently unused
+      // const relatedFiles = gdbFiles.filter(f => f.name.startsWith(gdbPath)); // Currently unused
       
       // Extract potential table names from .gdbtable files
       for (const tableFile of tableFiles) {
         try {
           // Read a small portion of the table file to look for column headers
           const buffer = await readFileAsArrayBuffer(tableFile, 1024); // Read first 1KB
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const view = new DataView(buffer);
+          // const view = new DataView(buffer); // Currently unused
           
           // Geodatabase files have specific binary formats, but we can try to find text patterns
           const decoder = new TextDecoder('utf-8', { fatal: false });
