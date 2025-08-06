@@ -18,11 +18,28 @@ interface FileSystemDirectoryHandle extends FileSystemHandle {
   entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
 }
 
+// Types for schema validation
+interface TableInfo {
+  schema: string;
+  name: string;
+  fullName: string;
+  displayName: string;
+}
+
+interface ColumnInfo {
+  name: string;
+  dataType: string;
+  isNullable: boolean;
+  defaultValue: string | null;
+  position: number;
+}
+
 declare global {
   interface Window {
     showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
   }
 }
+
 interface FormData {
   // Original fields
   projectName: string;
@@ -70,17 +87,25 @@ const publicationTypeOptions = [
   { value: 'other', label: 'Other' },
 ];
 
-// Domain options
+// Domain options (now includes schema option)
 const domainOptions = [
   { value: '', label: 'Select Domain' },
-  { value: 'hazards', label: 'Hazards' },
-  { value: 'groundwater', label: 'Groundwater' },
-  { value: 'wetlands', label: 'Wetlands' },
-  { value: 'geologic_maps', label: 'Geologic Maps' },
-  { value: 'energy_minerals', label: 'Energy & Minerals' },
-  { value: 'ccus', label: 'CCUS' },
+  { value: 'hazards', label: 'Hazards', schema: 'hazards' },
+  { value: 'groundwater', label: 'Groundwater', schema: 'groundwater' },
+  { value: 'wetlands', label: 'Wetlands', schema: 'wetlands' },
+  { value: 'geologic_maps', label: 'Geologic Maps', schema: 'mapping' },
+  { value: 'energy_minerals', label: 'Energy & Minerals', schema: 'emp' },
+  { value: 'ccus', label: 'CCUS', schema: 'ccus' },
+  { value: 'boreholes', label: 'Boreholes', schema: 'boreholes' },
+  { value: 'geochron', label: 'Geochronology', schema: 'geochron' },
   { value: 'custom', label: 'Other (specify)' },
 ];
+
+// Helper function to get schema from domain
+const getSchemaFromDomain = (domain: string): string => {
+  const domainOption = domainOptions.find(option => option.value === domain);
+  return domainOption?.schema || 'mapping'; // Default to mapping schema
+};
 
 // Load type options
 const loadTypeOptions = [
@@ -112,6 +137,18 @@ export const UploadForm: React.FC = () => {
     pubId: '',
     loadType: '',
   });
+
+  // State for schema validation
+  const [selectedTable, setSelectedTable] = useState<string>('');
+  const [showSchemaMapping, setShowSchemaMapping] = useState<boolean>(false);
+  const [sourceColumns, setSourceColumns] = useState<string[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [targetColumns, setTargetColumns] = useState<ColumnInfo[]>([]);
+  const [columnMapping, setColumnMapping] = useState<{[key: string]: string}>({});
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [availableTables, setAvailableTables] = useState<TableInfo[]>([]);
+  const [showManualColumnInput, setShowManualColumnInput] = useState<boolean>(false);
+  const [manualColumnInput, setManualColumnInput] = useState<string>('');
 
   // State for validation errors
   const [errors, setErrors] = useState<FormErrors>({});
@@ -316,28 +353,90 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Handle folder selection using File System Access API
-  const handleFolderSelect = async () => {
-    try {
-      // Check if the browser supports the File System Access API
-      if ('showDirectoryPicker' in window) {
-        const dirHandle = await window.showDirectoryPicker();
-        setIsProcessingFolders(true);
+  // Unified handler for both files and folders
+  const handleFileOrFolderSelect = async () => {
+    // First, try the folder picker if available
+    if ('showDirectoryPicker' in window) {
+      try {
+        const choice = await new Promise<'files' | 'folder' | 'cancel'>((resolve) => {
+          const modal = document.createElement('div');
+          modal.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+            z-index: 10000; font-family: system-ui, -apple-system, sans-serif;
+          `;
+          
+          modal.innerHTML = `
+            <div style="background: white; padding: 24px; border-radius: 8px; max-width: 400px; text-align: center;">
+              <h3 style="margin: 0 0 16px 0; color: #333;">Select Files or Folder</h3>
+              <p style="margin: 0 0 20px 0; color: #666; font-size: 14px;">
+                Choose individual files or select an entire folder (like .gdb)
+              </p>
+              <div style="display: flex; gap: 12px; justify-content: center;">
+                <button id="select-files" style="
+                  padding: 8px 16px; background: #6b7280; color: white; border: none; 
+                  border-radius: 6px; cursor: pointer; font-size: 14px;
+                ">Individual Files</button>
+                <button id="select-folder" style="
+                  padding: 8px 16px; background: #2563eb; color: white; border: none; 
+                  border-radius: 6px; cursor: pointer; font-size: 14px;
+                ">Folder (.gdb)</button>
+                <button id="cancel" style="
+                  padding: 8px 16px; background: #e5e7eb; color: #374151; border: none; 
+                  border-radius: 6px; cursor: pointer; font-size: 14px;
+                ">Cancel</button>
+              </div>
+            </div>
+          `;
+          
+          document.body.appendChild(modal);
+          
+          modal.querySelector('#select-files')?.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('files');
+          });
+          
+          modal.querySelector('#select-folder')?.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('folder');
+          });
+          
+          modal.querySelector('#cancel')?.addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('cancel');
+          });
+          
+          // Close on background click
+          modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+              document.body.removeChild(modal);
+              resolve('cancel');
+            }
+          });
+        });
         
-        const files = await readDirectoryHandle(dirHandle);
-        if (files.length > 0) {
-          addFiles(files);
+        if (choice === 'folder') {
+          const dirHandle = await window.showDirectoryPicker();
+          setIsProcessingFolders(true);
+          const files = await readDirectoryHandle(dirHandle);
+          if (files.length > 0) {
+            addFiles(files);
+          }
+          setIsProcessingFolders(false);
+        } else if (choice === 'files') {
+          document.getElementById('file-input')?.click();
         }
-      } else {
-        alert('Folder selection is not supported in this browser. Please use drag & drop for .gdb folders.');
+        
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          console.error('Error selecting folder:', error);
+          // Fallback to file picker
+          document.getElementById('file-input')?.click();
+        }
       }
-    } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        console.error('Error selecting folder:', error);
-        setUploadMessage('Error selecting folder. Please try drag & drop instead.');
-      }
-    } finally {
-      setIsProcessingFolders(false);
+    } else {
+      // If folder picker not supported, just use file picker
+      document.getElementById('file-input')?.click();
     }
   };
 
@@ -434,7 +533,13 @@ export const UploadForm: React.FC = () => {
       totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
       zipFilename: generatedFilename,
       
-      // Detect if geodatabase files are present
+      // Schema validation and mapping (if applicable)
+      schemaValidation: formData.loadType !== 'full' ? {
+        targetTable: selectedTable,
+        sourceColumns: sourceColumns,
+        columnMapping: columnMapping,
+        validationCompleted: showSchemaMapping ? false : Object.keys(columnMapping).length > 0
+      } : null,
       containsGeodatabase: formData.selectedFiles.some(file => 
         file.name.includes('.gdb/') || file.name.endsWith('.gdb')
       ),
@@ -468,7 +573,388 @@ export const UploadForm: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  // Upload zip to GCS via Cloud Function
+  // PostgREST configuration
+  const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
+
+  // Fetch available tables from PostgREST using Accept-Profile header for specific schema
+  const fetchAvailableTables = async (schemaName?: string): Promise<TableInfo[]> => {
+    try {
+      const schema = schemaName || 'mapping'; // Default to mapping schema
+      console.log(`🔍 Discovering tables in schema: ${schema}`);
+
+      // Use Accept-Profile header to specify which schema to query
+      const headers: Record<string, string> = {
+        'Accept-Profile': schema
+      };
+
+      // Get the OpenAPI spec for the specified schema
+      const apiResponse = await fetch(`${POSTGREST_URL}/`, { headers });
+      
+      if (!apiResponse.ok) {
+        throw new Error(`Failed to fetch API spec for schema ${schema}: ${apiResponse.statusText}`);
+      }
+
+      const apiSpec = await apiResponse.json();
+      const paths = apiSpec.paths || {};
+      
+      // Extract table names from paths (excluding /rpc/ endpoints)
+      const tableNames = Object.keys(paths)
+        .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
+        .map(path => path.substring(1)); // Remove leading slash
+      
+      console.log(`📋 Discovered tables in ${schema}:`, tableNames);
+      
+      const availableTables: TableInfo[] = [];
+
+      // Test each discovered table for accessibility
+      for (const tableName of tableNames) {
+        try {
+          const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`, { headers });
+          if (testResponse.ok) {
+            availableTables.push({
+              schema: schema,
+              name: tableName,
+              fullName: `${schema}.${tableName}`,
+              displayName: `${schema}.${tableName}`
+            });
+            console.log(`✅ Table accessible: ${schema}.${tableName}`);
+          }
+        } catch (error) {
+          console.log(`❌ Error testing table ${tableName}:`, error);
+        }
+      }
+
+      console.log(`Found ${availableTables.length} accessible tables in ${schema} schema`);
+      return availableTables;
+
+    } catch (error) {
+      console.error('Error fetching tables:', error);
+      return [];
+    }
+  };
+
+  // Analyze files to extract column names
+  const analyzeFileColumns = async (files: File[]): Promise<string[]> => {
+    const allColumns = new Set<string>();
+
+    for (const file of files) {
+      try {
+        if (file.name.toLowerCase().endsWith('.csv')) {
+          const columns = await analyzeCsvColumns(file);
+          columns.forEach(col => allColumns.add(col));
+        } else if (file.name.toLowerCase().endsWith('.dbf')) {
+          console.log('DBF file detected:', file.name);
+          const columns = await analyzeDbfColumns(file);
+          columns.forEach(col => allColumns.add(col));
+        } else if (file.name.includes('.gdb/')) {
+          console.log('GDB file detected:', file.name);
+          // Try to extract columns from geodatabase files
+          const columns = await analyzeGdbColumns(files);
+          columns.forEach(col => allColumns.add(col));
+        }
+      } catch (error) {
+        console.error('Error analyzing file:', file.name, error);
+      }
+    }
+
+    return Array.from(allColumns);
+  };
+
+  // Analyze geodatabase files to extract column names
+  const analyzeGdbColumns = async (allFiles: File[]): Promise<string[]> => {
+    try {
+      // Look for .gdbtable files which contain the actual data structure
+      const gdbFiles = allFiles.filter(f => f.name.includes('.gdb/'));
+      
+      // Find .gdbtablx files which contain table metadata
+      const tablxFiles = gdbFiles.filter(f => f.name.endsWith('.gdbtablx'));
+      
+      // Find .gdbtable files which contain the main data
+      const tableFiles = gdbFiles.filter(f => f.name.endsWith('.gdbtable'));
+      
+      console.log(`Found ${tablxFiles.length} .gdbtablx files and ${tableFiles.length} .gdbtable files`);
+      
+      // Try to read column information from various geodatabase metadata files
+      const columns = new Set<string>();
+      
+      // Method 1: Look for common GDB column patterns in file names
+      // const gdbPath = currentFile.name.substring(0, currentFile.name.lastIndexOf('/')); // Currently unused
+      // const relatedFiles = gdbFiles.filter(f => f.name.startsWith(gdbPath)); // Currently unused
+      
+      // Extract potential table names from .gdbtable files
+      for (const tableFile of tableFiles) {
+        try {
+          // Read a small portion of the table file to look for column headers
+          const buffer = await readFileAsArrayBuffer(tableFile, 1024); // Read first 1KB
+          // const view = new DataView(buffer); // Currently unused
+          
+          // Geodatabase files have specific binary formats, but we can try to find text patterns
+          const decoder = new TextDecoder('utf-8', { fatal: false });
+          const text = decoder.decode(buffer);
+          
+          // Look for common column name patterns
+          const possibleColumns = extractPossibleColumnNames(text);
+          possibleColumns.forEach(col => columns.add(col));
+          
+        } catch (error) {
+          console.log(`Could not read ${tableFile.name}:`, error);
+        }
+      }
+      
+      // Method 2: Check for .xml metadata files in the geodatabase
+      const xmlFiles = gdbFiles.filter(f => f.name.endsWith('.xml'));
+      for (const xmlFile of xmlFiles) {
+        try {
+          const xmlContent = await readFileAsText(xmlFile);
+          const xmlColumns = extractColumnsFromXml(xmlContent);
+          xmlColumns.forEach(col => columns.add(col));
+        } catch (error) {
+          console.log(`Could not read XML metadata ${xmlFile.name}:`, error);
+        }
+      }
+      
+      // Method 3: If we still don't have columns, look for common GIS column names
+      if (columns.size === 0) {
+        console.log('No columns detected from GDB files, using common GIS column patterns');
+        const commonColumns = ['OBJECTID', 'Shape', 'SHAPE', 'FID', 'geometry'];
+        commonColumns.forEach(col => columns.add(col));
+      }
+      
+      return Array.from(columns);
+      
+    } catch (error) {
+      console.error('Error analyzing geodatabase columns:', error);
+      return [];
+    }
+  };
+
+  // Helper function to read file as ArrayBuffer
+  const readFileAsArrayBuffer = async (file: File, maxBytes?: number): Promise<ArrayBuffer> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as ArrayBuffer);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      
+      if (maxBytes) {
+        reader.readAsArrayBuffer(file.slice(0, maxBytes));
+      } else {
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  };
+
+  // Helper function to read file as text
+  const readFileAsText = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  };
+
+  // Extract possible column names from binary data
+  const extractPossibleColumnNames = (text: string): string[] => {
+    const columns: string[] = [];
+    
+    // Common GIS field name patterns
+    const patterns = [
+      /\b[A-Z][A-Z_]{2,20}\b/g, // All caps field names like OBJECTID, SHAPE_AREA
+      /\b[a-z][a-z_]{2,20}\b/g, // Lowercase field names
+      /\b[A-Za-z][A-Za-z0-9_]{2,20}\b/g // Mixed case field names
+    ];
+    
+    for (const pattern of patterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        matches.forEach(match => {
+          // Filter out common non-column words
+          if (!['the', 'and', 'for', 'with', 'from', 'data', 'file', 'table'].includes(match.toLowerCase())) {
+            columns.push(match);
+          }
+        });
+      }
+    }
+    
+    return [...new Set(columns)]; // Remove duplicates
+  };
+
+  // Extract column information from XML metadata
+  const extractColumnsFromXml = (xmlContent: string): string[] => {
+    const columns: string[] = [];
+    
+    try {
+      // Look for field definitions in XML
+      const fieldMatches = xmlContent.match(/<Field[^>]*>[\s\S]*?<\/Field>/gi);
+      if (fieldMatches) {
+        for (const fieldMatch of fieldMatches) {
+          const nameMatch = fieldMatch.match(/<Name[^>]*>(.*?)<\/Name>/i);
+          if (nameMatch) {
+            columns.push(nameMatch[1]);
+          }
+        }
+      }
+      
+      // Alternative XML patterns
+      const altMatches = xmlContent.match(/name\s*=\s*["']([^"']+)["']/gi);
+      if (altMatches) {
+        for (const match of altMatches) {
+          const nameMatch = match.match(/name\s*=\s*["']([^"']+)["']/i);
+          if (nameMatch) {
+            columns.push(nameMatch[1]);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.log('Error parsing XML metadata:', error);
+    }
+    
+    return columns;
+  };
+
+  // Analyze DBF files (shapefile attribute tables)
+  const analyzeDbfColumns = async (file: File): Promise<string[]> => {
+    try {
+      // DBF files have a specific header structure
+      const buffer = await readFileAsArrayBuffer(file, 512); // Read header
+      const view = new DataView(buffer);
+      
+      // DBF header starts at byte 32 with field descriptors
+      const columns: string[] = [];
+      let offset = 32; // Start of field descriptors
+      
+      while (offset < buffer.byteLength - 32 && view.getUint8(offset) !== 0x0D) {
+        // Field name is 11 bytes starting at offset
+        const nameBytes = new Uint8Array(buffer, offset, 11);
+        const decoder = new TextDecoder('ascii');
+        const fieldName = decoder.decode(nameBytes).replace(/\0+$/, ''); // Remove null terminators
+        
+        if (fieldName.length > 0) {
+          columns.push(fieldName);
+        }
+        
+        offset += 32; // Each field descriptor is 32 bytes
+      }
+      
+      return columns;
+      
+    } catch (error) {
+      console.error('Error analyzing DBF columns:', error);
+      return [];
+    }
+  };
+
+  // Handle manual column input submission
+  const handleManualColumnSubmit = () => {
+    const columns = manualColumnInput
+      .split(',')
+      .map(col => col.trim())
+      .filter(col => col.length > 0);
+    
+    // Set the source columns directly
+    setSourceColumns(columns);
+    setShowManualColumnInput(false);
+    setManualColumnInput('');
+  };
+
+  // Handle manual column input cancellation
+  const handleManualColumnCancel = () => {
+    setShowManualColumnInput(false);
+    setManualColumnInput('');
+  };
+
+  // Analyze CSV file to get column headers
+  const analyzeCsvColumns = async (file: File): Promise<string[]> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const firstLine = text.split('\n')[0];
+          // Handle different CSV delimiters
+          const delimiters = [',', '\t', ';', '|'];
+          let columns: string[] = [];
+          
+          for (const delimiter of delimiters) {
+            const testColumns = firstLine.split(delimiter);
+            if (testColumns.length > columns.length) {
+              columns = testColumns;
+            }
+          }
+          
+          // Clean column names
+          const cleanColumns = columns.map(col => 
+            col.trim().replace(/^["']|["']$/g, '') // Remove quotes
+          ).filter(col => col.length > 0);
+          
+          resolve(cleanColumns);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  };
+  // Fetch column schema for a specific table using Accept-Profile header
+  const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
+    try {
+      // Use Accept-Profile header to specify which schema to query
+      const headers: Record<string, string> = {
+        'Accept-Profile': schema
+      };
+
+      // Get the OpenAPI spec to extract column definitions for the specific schema
+      const response = await fetch(`${POSTGREST_URL}/`, { headers });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch API spec for schema ${schema}: ${response.statusText}`);
+      }
+      
+      const apiSpec = await response.json();
+      const definitions = apiSpec.definitions;
+      
+      if (!definitions[tableName]) {
+        throw new Error(`Table ${tableName} not found in ${schema} schema definitions`);
+      }
+      
+      const tableDefinition = definitions[tableName];
+      const properties = tableDefinition.properties;
+      
+      // Convert properties to ColumnInfo format
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const columns: ColumnInfo[] = Object.entries(properties).map(([columnName, columnDef]: [string, any], index) => {
+        // Map PostgREST types to more readable types
+        let dataType = columnDef.type || 'string';
+        if (columnDef.format) {
+          if (columnDef.format.includes('integer')) dataType = 'integer';
+          else if (columnDef.format.includes('geometry')) dataType = 'geometry';
+          else if (columnDef.format.includes('date')) dataType = 'date';
+          else if (columnDef.format.includes('character')) dataType = 'text';
+          else if (columnDef.format.includes('numeric')) dataType = 'numeric';
+          else if (columnDef.format.includes('boolean')) dataType = 'boolean';
+        }
+        
+        const isRequired = tableDefinition.required?.includes(columnName) || false;
+        
+        return {
+          name: columnName,
+          dataType: dataType,
+          isNullable: !isRequired,
+          defaultValue: columnDef.default || null,
+          position: index + 1
+        };
+      });
+      
+      console.log(`📋 Schema for ${schema}.${tableName}:`, columns.map(c => `${c.name} (${c.dataType})`));
+      return columns;
+      
+    } catch (error) {
+      console.error(`Error fetching schema for ${schema}.${tableName}:`, error);
+      return [];
+    }
+  };
   const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
     try {
       const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
@@ -528,6 +1014,72 @@ export const UploadForm: React.FC = () => {
     });
   };
 
+  // Start schema validation process
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const startSchemaValidation = async () => {
+    if (formData.selectedFiles.length === 0) {
+      setUploadMessage('Please select files before validating schema.');
+      return;
+    }
+
+    setIsProcessingFolders(true);
+    try {
+      // 1. Get schema from the selected domain
+      const schemaToUse = getSchemaFromDomain(formData.domain);
+      console.log(`🎯 Using schema "${schemaToUse}" for domain "${formData.domain}"`);
+      
+      // 2. Fetch available tables using the domain's schema
+      const tables = await fetchAvailableTables(schemaToUse);
+      setAvailableTables(tables);
+      
+      if (tables.length === 0) {
+        setUploadMessage(`No accessible tables found in the ${schemaToUse} schema. Please check the schema configuration.`);
+        return;
+      }
+      
+      // 3. Analyze uploaded files for column names
+      const columns = await analyzeFileColumns(formData.selectedFiles);
+      setSourceColumns(columns);
+      
+      if (columns.length === 0) {
+        setUploadMessage('Could not detect column names from uploaded files. You may need to upload CSV files or files with detectable schemas.');
+        return;
+      }
+      
+      // 4. Show schema mapping interface
+      setShowSchemaMapping(true);
+      
+    } catch (error) {
+      console.error('Schema validation error:', error);
+      setUploadMessage('Error during schema validation. Please try again.');
+    } finally {
+      setIsProcessingFolders(false);
+    }
+  };
+
+  // Handle target table selection
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleTableSelection = async (tableFullName: string) => {
+    setSelectedTable(tableFullName);
+    
+    if (tableFullName) {
+      const [schema, tableName] = tableFullName.split('.');
+      const columns = await fetchTableSchema(schema, tableName);
+      setTargetColumns(columns);
+      
+      // Initialize mapping - try to auto-match columns with same names
+      const newMapping: {[key: string]: string} = {};
+      sourceColumns.forEach(sourceCol => {
+        const matchingTarget = columns.find((targetCol: ColumnInfo) => 
+          targetCol.name.toLowerCase() === sourceCol.toLowerCase()
+        );
+        if (matchingTarget) {
+          newMapping[sourceCol] = matchingTarget.name;
+        }
+      });
+      setColumnMapping(newMapping);
+    }
+  };
   // Handle form submission
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -536,6 +1088,12 @@ export const UploadForm: React.FC = () => {
     if (!validateForm()) {
       setUploadMessage('Please correct the errors in the form.');
       return;
+    }
+
+    // If load type is not 'full', we need schema validation
+    if (formData.loadType !== 'full') {
+      await startSchemaValidation();
+      return; // Schema validation will call this function again after mapping
     }
 
     setIsSubmitting(true);
@@ -573,6 +1131,8 @@ export const UploadForm: React.FC = () => {
       });
       setErrors({});
       setGeneratedFilename('');
+      setColumnMapping({});
+      setSelectedTable('');
       
       // Clear the file input element
       const fileInput = document.getElementById('file-input') as HTMLInputElement;
@@ -657,6 +1217,211 @@ export const UploadForm: React.FC = () => {
   // Main form (authenticated users only)
   return (
     <div className="max-w-4xl mx-auto p-8 bg-white rounded-lg shadow-lg">
+      {/* Manual Column Input Modal */}
+      {showManualColumnInput && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Manual Column Entry</h2>
+            <p className="text-gray-600 mb-4">
+              File geodatabase detected! Please enter the column names from your .gdb file separated by commas:
+            </p>
+            <div className="mb-4">
+              <label htmlFor="columnInput" className="block text-gray-700 font-semibold mb-2">
+                Column Names:
+              </label>
+              <textarea
+                id="columnInput"
+                value={manualColumnInput}
+                onChange={(e) => setManualColumnInput(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                rows={3}
+                placeholder="objectid,shape,unit_name,age,description,lithology"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter column names separated by commas. You can find these in ArcGIS Pro or another GIS application.
+              </p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleManualColumnCancel}
+                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+              >
+                Skip Column Mapping
+              </button>
+              <button
+                onClick={handleManualColumnSubmit}
+                disabled={!manualColumnInput.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Continue with Mapping
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Schema Mapping Modal */}
+      {showSchemaMapping && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Schema Validation & Column Mapping</h2>
+            
+            {/* Table Selection */}
+            <div className="mb-6">
+              <label className="block text-gray-700 font-semibold mb-2">
+                Select Target Table:
+              </label>
+              <select
+                value={selectedTable}
+                onChange={(e) => handleTableSelection(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Choose a target table...</option>
+                {availableTables.map(table => (
+                  <option key={table.fullName} value={table.fullName}>
+                    {table.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedTable && targetColumns.length > 0 && (
+              <>
+                {/* Column Mapping Interface */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                  {/* Source Columns */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                      Your File Columns ({sourceColumns.length})
+                    </h3>
+                    <div className="border border-gray-300 rounded-md p-4 bg-gray-50 max-h-64 overflow-y-auto">
+                      {sourceColumns.map(column => (
+                        <div key={column} className="mb-2">
+                          <div className={`p-2 rounded border ${
+                            columnMapping[column] 
+                              ? 'bg-green-100 border-green-300' 
+                              : 'bg-yellow-100 border-yellow-300'
+                          }`}>
+                            <span className="font-medium">{column}</span>
+                            {columnMapping[column] && (
+                              <span className="text-sm text-green-600 ml-2">
+                                → {columnMapping[column]}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Target Columns */}
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                      Target Table Columns ({targetColumns.length})
+                    </h3>
+                    <div className="border border-gray-300 rounded-md p-4 bg-gray-50 max-h-64 overflow-y-auto">
+                      {targetColumns.map(column => (
+                        <div key={column.name} className="mb-2">
+                          <div className="p-2 rounded border border-gray-200 bg-white">
+                            <span className="font-medium">{column.name}</span>
+                            <span className="text-sm text-gray-500 ml-2">
+                              ({column.dataType})
+                            </span>
+                            {!column.isNullable && (
+                              <span className="text-xs text-red-500 ml-2">Required</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Manual Mapping Interface */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Column Mapping</h3>
+                  {sourceColumns.map(sourceCol => (
+                    <div key={sourceCol} className="mb-3 p-3 border border-gray-200 rounded-md">
+                      <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                          <span className="font-medium text-gray-800">{sourceCol}</span>
+                        </div>
+                        <div className="text-gray-500">→</div>
+                        <div className="flex-1">
+                          <select
+                            value={columnMapping[sourceCol] || ''}
+                            onChange={(e) => setColumnMapping(prev => ({
+                              ...prev,
+                              [sourceCol]: e.target.value
+                            }))}
+                            className="w-full px-3 py-1 border border-gray-300 rounded-md text-sm"
+                          >
+                            <option value="">Select target column...</option>
+                            {targetColumns.map(targetCol => (
+                              <option key={targetCol.name} value={targetCol.name}>
+                                {targetCol.name} ({targetCol.dataType})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Validation Status */}
+                <div className="mb-6">
+                  {sourceColumns.filter(col => !columnMapping[col]).length > 0 ? (
+                    <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                      <p className="text-yellow-800 font-medium">
+                        ⚠️ Unmapped columns ({sourceColumns.filter(col => !columnMapping[col]).length}):
+                      </p>
+                      <p className="text-yellow-700 text-sm mt-1">
+                        {sourceColumns.filter(col => !columnMapping[col]).join(', ')}
+                      </p>
+                      <p className="text-yellow-600 text-xs mt-2">
+                        All source columns must be mapped before proceeding.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-md">
+                      <p className="text-green-800 font-medium">
+                        ✅ All columns mapped successfully!
+                      </p>
+                      <p className="text-green-600 text-sm mt-1">
+                        Ready to proceed with upload.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowSchemaMapping(false)}
+                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              {sourceColumns.filter(col => !columnMapping[col]).length === 0 && (
+                <button
+                  onClick={() => {
+                    setShowSchemaMapping(false);
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    handleSubmit(new Event('submit') as any);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                >
+                  Proceed with Upload
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* User info header */}
       <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
         <div className="flex items-center justify-between">
@@ -973,22 +1738,19 @@ export const UploadForm: React.FC = () => {
             ) : (
               <>
                 <p className="mb-2">Drag & drop files or folders here (including .gdb), or</p>
-                <div className="flex gap-2 justify-center">
-                  <button
-                    type="button"
-                    onClick={() => document.getElementById('file-input')?.click()}
-                    className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors duration-200 text-base"
-                  >
-                    Choose Files
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleFolderSelect}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200 text-base"
-                  >
-                    Choose GeoDB
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleFileOrFolderSelect}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200 text-base"
+                >
+                  Choose Files or Folder
+                </button>
+                <p className="text-xs text-gray-500 mt-2">
+                  ✅ Supports File Geodatabases (.gdb folders)<br/>
+                  ✅ Shapefiles, CSVs, and other individual files<br/>
+                  ✅ Multiple selection with Ctrl/Cmd<br/>
+                  💡 Button will ask whether you want files or folders
+                </p>
               </>
             )}
             
@@ -1068,13 +1830,15 @@ export const UploadForm: React.FC = () => {
                  uploadMessage.includes('Uploading') ? 'Uploading...' : 
                  'Processing...'}
               </div>
+            ) : formData.loadType !== 'full' ? (
+              'Validate Schema & Upload'
             ) : (
               'Create & Upload'
             )}
           </button>
           {uploadMessage && (
             <div className={`ml-4 p-3 rounded-md font-medium ${
-              uploadMessage.includes('error') 
+              uploadMessage.includes('error') || uploadMessage.includes('failed') || uploadMessage.includes('❌')
                 ? 'bg-red-50 text-red-700 border border-red-200' 
                 : 'bg-green-50 text-green-700 border border-green-200'
             }`}>
@@ -1093,6 +1857,28 @@ export const UploadForm: React.FC = () => {
             Required fields are marked with <span className="text-red-500">*</span>. 
             Optional fields will be omitted from filename if left empty.
           </p>
+        </div>
+
+        {/* Enhanced Info Box */}
+        <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+          <p className="text-xs text-blue-700">
+            <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
+            The application will automatically include all files within the geodatabase while preserving the directory structure.
+          </p>
+          {/* Development: Test table discovery */}
+          {process.env.NODE_ENV === 'development' && (
+            <button
+              type="button"
+              onClick={async () => {
+                console.log('🔍 Testing table discovery...');
+                const tables = await fetchAvailableTables();
+                console.log('📋 Discovered tables:', tables);
+              }}
+              className="mt-2 px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+            >
+              Test Table Discovery (Dev Only)
+            </button>
+          )}
         </div>
 
         {/* Audit Trail Info */}
