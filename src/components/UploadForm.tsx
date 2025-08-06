@@ -146,6 +146,8 @@ export const UploadForm: React.FC = () => {
   const [columnMapping, setColumnMapping] = useState<{[key: string]: string}>({});
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [availableTables, setAvailableTables] = useState<TableInfo[]>([]);
+  const [showManualColumnInput, setShowManualColumnInput] = useState<boolean>(false);
+  const [manualColumnInput, setManualColumnInput] = useState<string>('');
 
   // State for validation errors
   const [errors, setErrors] = useState<FormErrors>({});
@@ -640,12 +642,14 @@ export const UploadForm: React.FC = () => {
           const columns = await analyzeCsvColumns(file);
           columns.forEach(col => allColumns.add(col));
         } else if (file.name.toLowerCase().endsWith('.dbf')) {
-          // DBF files from shapefiles - would need a DBF parser
           console.log('DBF file detected:', file.name);
-          // For now, we'll handle this in the mapping UI
+          const columns = await analyzeDbfColumns(file);
+          columns.forEach(col => allColumns.add(col));
         } else if (file.name.includes('.gdb/')) {
-          // File geodatabase files - these are complex, skip for now
           console.log('GDB file detected:', file.name);
+          // Try to extract columns from geodatabase files
+          const columns = await analyzeGdbColumns(files, file);
+          columns.forEach(col => allColumns.add(col));
         }
       } catch (error) {
         console.error('Error analyzing file:', file.name, error);
@@ -653,6 +657,224 @@ export const UploadForm: React.FC = () => {
     }
 
     return Array.from(allColumns);
+  };
+
+  // Analyze geodatabase files to extract column names
+  const analyzeGdbColumns = async (allFiles: File[], currentFile: File): Promise<string[]> => {
+    try {
+      // Look for .gdbtable files which contain the actual data structure
+      const gdbFiles = allFiles.filter(f => f.name.includes('.gdb/'));
+      
+      // Find .gdbtablx files which contain table metadata
+      const tablxFiles = gdbFiles.filter(f => f.name.endsWith('.gdbtablx'));
+      
+      // Find .gdbtable files which contain the main data
+      const tableFiles = gdbFiles.filter(f => f.name.endsWith('.gdbtable'));
+      
+      console.log(`Found ${tablxFiles.length} .gdbtablx files and ${tableFiles.length} .gdbtable files`);
+      
+      // Try to read column information from various geodatabase metadata files
+      const columns = new Set<string>();
+      
+      // Method 1: Look for common GDB column patterns in file names
+      const gdbPath = currentFile.name.substring(0, currentFile.name.lastIndexOf('/'));
+      const relatedFiles = gdbFiles.filter(f => f.name.startsWith(gdbPath));
+      
+      // Extract potential table names from .gdbtable files
+      for (const tableFile of tableFiles) {
+        try {
+          // Read a small portion of the table file to look for column headers
+          const buffer = await readFileAsArrayBuffer(tableFile, 1024); // Read first 1KB
+          const view = new DataView(buffer);
+          
+          // Geodatabase files have specific binary formats, but we can try to find text patterns
+          const decoder = new TextDecoder('utf-8', { fatal: false });
+          const text = decoder.decode(buffer);
+          
+          // Look for common column name patterns
+          const possibleColumns = extractPossibleColumnNames(text);
+          possibleColumns.forEach(col => columns.add(col));
+          
+        } catch (error) {
+          console.log(`Could not read ${tableFile.name}:`, error);
+        }
+      }
+      
+      // Method 2: Check for .xml metadata files in the geodatabase
+      const xmlFiles = gdbFiles.filter(f => f.name.endsWith('.xml'));
+      for (const xmlFile of xmlFiles) {
+        try {
+          const xmlContent = await readFileAsText(xmlFile);
+          const xmlColumns = extractColumnsFromXml(xmlContent);
+          xmlColumns.forEach(col => columns.add(col));
+        } catch (error) {
+          console.log(`Could not read XML metadata ${xmlFile.name}:`, error);
+        }
+      }
+      
+      // Method 3: If we still don't have columns, look for common GIS column names
+      if (columns.size === 0) {
+        console.log('No columns detected from GDB files, using common GIS column patterns');
+        const commonColumns = ['OBJECTID', 'Shape', 'SHAPE', 'FID', 'geometry'];
+        commonColumns.forEach(col => columns.add(col));
+      }
+      
+      return Array.from(columns);
+      
+    } catch (error) {
+      console.error('Error analyzing geodatabase columns:', error);
+      return [];
+    }
+  };
+
+  // Helper function to read file as ArrayBuffer
+  const readFileAsArrayBuffer = async (file: File, maxBytes?: number): Promise<ArrayBuffer> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as ArrayBuffer);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      
+      if (maxBytes) {
+        reader.readAsArrayBuffer(file.slice(0, maxBytes));
+      } else {
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  };
+
+  // Helper function to read file as text
+  const readFileAsText = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
+    });
+  };
+
+  // Extract possible column names from binary data
+  const extractPossibleColumnNames = (text: string): string[] => {
+    const columns: string[] = [];
+    
+    // Common GIS field name patterns
+    const patterns = [
+      /\b[A-Z][A-Z_]{2,20}\b/g, // All caps field names like OBJECTID, SHAPE_AREA
+      /\b[a-z][a-z_]{2,20}\b/g, // Lowercase field names
+      /\b[A-Za-z][A-Za-z0-9_]{2,20}\b/g // Mixed case field names
+    ];
+    
+    for (const pattern of patterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        matches.forEach(match => {
+          // Filter out common non-column words
+          if (!['the', 'and', 'for', 'with', 'from', 'data', 'file', 'table'].includes(match.toLowerCase())) {
+            columns.push(match);
+          }
+        });
+      }
+    }
+    
+    return [...new Set(columns)]; // Remove duplicates
+  };
+
+  // Extract column information from XML metadata
+  const extractColumnsFromXml = (xmlContent: string): string[] => {
+    const columns: string[] = [];
+    
+    try {
+      // Look for field definitions in XML
+      const fieldMatches = xmlContent.match(/<Field[^>]*>[\s\S]*?<\/Field>/gi);
+      if (fieldMatches) {
+        for (const fieldMatch of fieldMatches) {
+          const nameMatch = fieldMatch.match(/<Name[^>]*>(.*?)<\/Name>/i);
+          if (nameMatch) {
+            columns.push(nameMatch[1]);
+          }
+        }
+      }
+      
+      // Alternative XML patterns
+      const altMatches = xmlContent.match(/name\s*=\s*["']([^"']+)["']/gi);
+      if (altMatches) {
+        for (const match of altMatches) {
+          const nameMatch = match.match(/name\s*=\s*["']([^"']+)["']/i);
+          if (nameMatch) {
+            columns.push(nameMatch[1]);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.log('Error parsing XML metadata:', error);
+    }
+    
+    return columns;
+  };
+
+  // Analyze DBF files (shapefile attribute tables)
+  const analyzeDbfColumns = async (file: File): Promise<string[]> => {
+    try {
+      // DBF files have a specific header structure
+      const buffer = await readFileAsArrayBuffer(file, 512); // Read header
+      const view = new DataView(buffer);
+      
+      // DBF header starts at byte 32 with field descriptors
+      const columns: string[] = [];
+      let offset = 32; // Start of field descriptors
+      
+      while (offset < buffer.byteLength - 32 && view.getUint8(offset) !== 0x0D) {
+        // Field name is 11 bytes starting at offset
+        const nameBytes = new Uint8Array(buffer, offset, 11);
+        const decoder = new TextDecoder('ascii');
+        const fieldName = decoder.decode(nameBytes).replace(/\0+$/, ''); // Remove null terminators
+        
+        if (fieldName.length > 0) {
+          columns.push(fieldName);
+        }
+        
+        offset += 32; // Each field descriptor is 32 bytes
+      }
+      
+      return columns;
+      
+    } catch (error) {
+      console.error('Error analyzing DBF columns:', error);
+      return [];
+    }
+  };
+
+  // Prompt user to manually enter column names for geodatabase
+  const promptForManualColumns = async (): Promise<string[]> => {
+    return new Promise((resolve) => {
+      setShowManualColumnInput(true);
+      
+      // Store resolve function to be called when modal is closed
+      window.resolveManualColumns = (columns: string[]) => {
+        setShowManualColumnInput(false);
+        setManualColumnInput('');
+        resolve(columns);
+      };
+    });
+  };
+
+  // Handle manual column input submission
+  const handleManualColumnSubmit = () => {
+    const columns = manualColumnInput
+      .split(',')
+      .map(col => col.trim())
+      .filter(col => col.length > 0);
+    
+    if (window.resolveManualColumns) {
+      window.resolveManualColumns(columns);
+    }
+  };
+
+  // Handle manual column input cancellation
+  const handleManualColumnCancel = () => {
+    if (window.resolveManualColumns) {
+      window.resolveManualColumns([]);
+    }
   };
 
   // Analyze CSV file to get column headers
@@ -714,7 +936,6 @@ export const UploadForm: React.FC = () => {
       const properties = tableDefinition.properties;
       
       // Convert properties to ColumnInfo format
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const columns: ColumnInfo[] = Object.entries(properties).map(([columnName, columnDef]: [string, any], index) => {
         // Map PostgREST types to more readable types
         let dataType = columnDef.type || 'string';
@@ -1008,6 +1229,49 @@ export const UploadForm: React.FC = () => {
   // Main form (authenticated users only)
   return (
     <div className="max-w-4xl mx-auto p-8 bg-white rounded-lg shadow-lg">
+      {/* Manual Column Input Modal */}
+      {showManualColumnInput && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Manual Column Entry</h2>
+            <p className="text-gray-600 mb-4">
+              File geodatabase detected! Please enter the column names from your .gdb file separated by commas:
+            </p>
+            <div className="mb-4">
+              <label htmlFor="columnInput" className="block text-gray-700 font-semibold mb-2">
+                Column Names:
+              </label>
+              <textarea
+                id="columnInput"
+                value={manualColumnInput}
+                onChange={(e) => setManualColumnInput(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                rows={3}
+                placeholder="objectid,shape,unit_name,age,description,lithology"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Enter column names separated by commas. You can find these in ArcGIS Pro or another GIS application.
+              </p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleManualColumnCancel}
+                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+              >
+                Skip Column Mapping
+              </button>
+              <button
+                onClick={handleManualColumnSubmit}
+                disabled={!manualColumnInput.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Continue with Mapping
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Schema Mapping Modal */}
       {showSchemaMapping && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1157,7 +1421,6 @@ export const UploadForm: React.FC = () => {
                 <button
                   onClick={() => {
                     setShowSchemaMapping(false);
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     handleSubmit(new Event('submit') as any);
                   }}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
