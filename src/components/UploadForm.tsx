@@ -37,8 +37,10 @@ interface ColumnInfo {
 declare global {
   interface Window {
     showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
+    resolveManualColumns?: (columns: string[]) => void;
   }
 }
+
 interface FormData {
   // Original fields
   projectName: string;
@@ -678,6 +680,7 @@ export const UploadForm: React.FC = () => {
       
       // Method 1: Look for common GDB column patterns in file names
       const gdbPath = currentFile.name.substring(0, currentFile.name.lastIndexOf('/'));
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const relatedFiles = gdbFiles.filter(f => f.name.startsWith(gdbPath));
       
       // Extract potential table names from .gdbtable files
@@ -685,6 +688,7 @@ export const UploadForm: React.FC = () => {
         try {
           // Read a small portion of the table file to look for column headers
           const buffer = await readFileAsArrayBuffer(tableFile, 1024); // Read first 1KB
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const view = new DataView(buffer);
           
           // Geodatabase files have specific binary formats, but we can try to find text patterns
@@ -845,6 +849,7 @@ export const UploadForm: React.FC = () => {
   };
 
   // Prompt user to manually enter column names for geodatabase
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const promptForManualColumns = async (): Promise<string[]> => {
     return new Promise((resolve) => {
       setShowManualColumnInput(true);
@@ -854,6 +859,8 @@ export const UploadForm: React.FC = () => {
         setShowManualColumnInput(false);
         setManualColumnInput('');
         resolve(columns);
+        // Clean up the global reference after use
+        delete window.resolveManualColumns;
       };
     });
   };
@@ -936,6 +943,7 @@ export const UploadForm: React.FC = () => {
       const properties = tableDefinition.properties;
       
       // Convert properties to ColumnInfo format
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const columns: ColumnInfo[] = Object.entries(properties).map(([columnName, columnDef]: [string, any], index) => {
         // Map PostgREST types to more readable types
         let dataType = columnDef.type || 'string';
@@ -1421,6 +1429,7 @@ export const UploadForm: React.FC = () => {
                 <button
                   onClick={() => {
                     setShowSchemaMapping(false);
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     handleSubmit(new Event('submit') as any);
                   }}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
@@ -1849,7 +1858,7 @@ export const UploadForm: React.FC = () => {
           </button>
           {uploadMessage && (
             <div className={`ml-4 p-3 rounded-md font-medium ${
-              uploadMessage.includes('error') 
+              uploadMessage.includes('error') || uploadMessage.includes('failed') || uploadMessage.includes('❌')
                 ? 'bg-red-50 text-red-700 border border-red-200' 
                 : 'bg-green-50 text-green-700 border border-green-200'
             }`}>
