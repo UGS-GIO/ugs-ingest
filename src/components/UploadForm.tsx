@@ -225,8 +225,6 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-
-
   // Enhanced function to handle both files and folders
   const processDataTransferItems = async (items: DataTransferItemList): Promise<File[]> => {
     const files: File[] = [];
@@ -637,6 +635,24 @@ export const UploadForm: React.FC = () => {
   const analyzeFileColumns = async (files: File[]): Promise<string[]> => {
     const allColumns = new Set<string>();
 
+    // Check if we have a geodatabase
+    const hasGDB = files.some(f => f.name.includes('.gdb/'));
+    
+    if (hasGDB) {
+      // Try to extract columns using GDAL microservice
+      try {
+        const gdbColumns = await analyzeGdbColumnsWithGDAL(files);
+        gdbColumns.forEach(col => allColumns.add(col));
+        if (gdbColumns.length > 0) {
+          return Array.from(allColumns);
+        }
+      } catch (error) {
+        console.error('Failed to analyze GDB with GDAL service:', error);
+        // Fall back to other methods if GDAL service fails
+      }
+    }
+
+    // Process other file types
     for (const file of files) {
       try {
         if (file.name.toLowerCase().endsWith('.csv')) {
@@ -648,7 +664,7 @@ export const UploadForm: React.FC = () => {
           columns.forEach(col => allColumns.add(col));
         } else if (file.name.includes('.gdb/')) {
           console.log('GDB file detected:', file.name);
-          // Try to extract columns from geodatabase files
+          // Try local extraction as fallback
           const columns = await analyzeGdbColumns(files);
           columns.forEach(col => allColumns.add(col));
         }
@@ -660,49 +676,143 @@ export const UploadForm: React.FC = () => {
     return Array.from(allColumns);
   };
 
-  // Analyze geodatabase files to extract column names
-  const analyzeGdbColumns = async (allFiles: File[]): Promise<string[]> => {
+  // Analyze geodatabase using GDAL microservice
+  const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<string[]> => {
+    const GDAL_SERVICE_URL = 'https://gdal-microservice-534590904912.us-central1.run.app';
+    
     try {
-      // Look for .gdbtable files which contain the actual data structure
-      const gdbFiles = allFiles.filter(f => f.name.includes('.gdb/'));
+      console.log('🔍 Using GDAL microservice to analyze geodatabase...');
       
-      // Find .gdbtablx files which contain table metadata
-      const tablxFiles = gdbFiles.filter(f => f.name.endsWith('.gdbtablx'));
+      // We need to create a zip of the .gdb folder to send to the service
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
       
-      // Find .gdbtable files which contain the main data
-      const tableFiles = gdbFiles.filter(f => f.name.endsWith('.gdbtable'));
-      
-      console.log(`Found ${tablxFiles.length} .gdbtablx files and ${tableFiles.length} .gdbtable files`);
-      
-      // Try to read column information from various geodatabase metadata files
-      const columns = new Set<string>();
-      
-      // Method 1: Look for common GDB column patterns in file names
-      // const gdbPath = currentFile.name.substring(0, currentFile.name.lastIndexOf('/')); // Currently unused
-      // const relatedFiles = gdbFiles.filter(f => f.name.startsWith(gdbPath)); // Currently unused
-      
-      // Extract potential table names from .gdbtable files
-      for (const tableFile of tableFiles) {
-        try {
-          // Read a small portion of the table file to look for column headers
-          const buffer = await readFileAsArrayBuffer(tableFile, 1024); // Read first 1KB
-          // const view = new DataView(buffer); // Currently unused
-          
-          // Geodatabase files have specific binary formats, but we can try to find text patterns
-          const decoder = new TextDecoder('utf-8', { fatal: false });
-          const text = decoder.decode(buffer);
-          
-          // Look for common column name patterns
-          const possibleColumns = extractPossibleColumnNames(text);
-          possibleColumns.forEach(col => columns.add(col));
-          
-        } catch (error) {
-          console.log(`Could not read ${tableFile.name}:`, error);
-        }
+      // Add all .gdb files to the zip
+      const gdbFiles = files.filter(f => f.name.includes('.gdb/'));
+      if (gdbFiles.length === 0) {
+        console.log('No .gdb files found');
+        return [];
       }
       
-      // Method 2: Check for .xml metadata files in the geodatabase
-      const xmlFiles = gdbFiles.filter(f => f.name.endsWith('.xml'));
+      // Find the .gdb folder name
+      const gdbFolderName = gdbFiles[0].name.split('/')[0];
+      console.log(`📁 Processing geodatabase: ${gdbFolderName}`);
+      
+      // Add files to zip preserving structure
+      for (const file of gdbFiles) {
+        zip.file(file.name, file);
+      }
+      
+      // Generate zip blob
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      
+      // Create form data to upload to GDAL service
+      const formData = new FormData();
+      formData.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
+      formData.append('command', 'ogrinfo');
+      // Use -al for all layers, -so for summary only (no features)
+      formData.append('args', JSON.stringify(['-al', '-so', gdbFolderName]));
+      
+      // Upload and execute
+      const response = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        throw new Error(`GDAL service returned ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('GDAL service response:', result);
+      
+      if (result.success && result.stdout) {
+        // Parse ogrinfo output to extract field names
+        return parseOgrInfoOutput(result.stdout);
+      } else {
+        console.error('GDAL command failed:', result.stderr);
+        return [];
+      }
+      
+    } catch (error) {
+      console.error('Error using GDAL microservice:', error);
+      // Don't throw - let it fall back to other methods
+      return [];
+    }
+  };
+
+  // Parse ogrinfo output to extract field names
+  const parseOgrInfoOutput = (output: string): string[] => {
+    const columns = new Set<string>();
+    
+    // ogrinfo output format for fields:
+    // OBJECTID: Integer64 (0.0)
+    // Shape: Geometry
+    // field_name: String (255.0)
+    
+    const lines = output.split('\n');
+    let inLayerSection = false;
+    
+    for (const line of lines) {
+      // Check if we're in a layer section
+      if (line.startsWith('Layer name:')) {
+        inLayerSection = true;
+        continue;
+      }
+      
+      // Look for field definitions (they have a colon followed by a type)
+      if (inLayerSection && line.includes(':')) {
+        // Match pattern: "field_name: Type"
+        const match = line.match(/^([^:]+):\s*(String|Integer|Integer64|Real|Date|DateTime|Binary|Geometry)/i);
+        if (match) {
+          const fieldName = match[1].trim();
+          // Skip metadata fields
+          if (!fieldName.startsWith('Layer') && 
+              !fieldName.startsWith('Geometry') && 
+              !fieldName.startsWith('Feature Count') &&
+              !fieldName.startsWith('Extent') &&
+              !fieldName.startsWith('SRS') &&
+              !fieldName.startsWith('FID')) {
+            columns.add(fieldName);
+          }
+        }
+      }
+    }
+    
+    // Always include common GIS fields if we found any columns
+    if (columns.size > 0) {
+      // Add Shape/geometry field as it's often implicit
+      if (!Array.from(columns).some(col => col.toLowerCase() === 'shape' || col.toLowerCase() === 'geometry')) {
+        columns.add('Shape');
+      }
+      // OBJECTID is usually present
+      if (!Array.from(columns).some(col => col.toUpperCase() === 'OBJECTID')) {
+        columns.add('OBJECTID');
+      }
+    }
+    
+    const columnArray = Array.from(columns);
+    console.log(`✅ Extracted ${columnArray.length} columns from geodatabase:`, columnArray);
+    return columnArray;
+  };
+
+  // Analyze geodatabase files to extract column names (fallback method)
+  const analyzeGdbColumns = async (allFiles: File[]): Promise<string[]> => {
+    try {
+      const gdbFiles = allFiles.filter(f => f.name.includes('.gdb/'));
+      
+      console.log(`Found ${gdbFiles.length} files in geodatabase`);
+      
+      // Look for metadata.xml files which might contain field information
+      const xmlFiles = gdbFiles.filter(f => 
+        f.name.endsWith('.xml') || 
+        f.name.includes('metadata') ||
+        f.name.includes('gdbindexes')
+      );
+      
+      const columns = new Set<string>();
+      
+      // Try to read XML metadata files
       for (const xmlFile of xmlFiles) {
         try {
           const xmlContent = await readFileAsText(xmlFile);
@@ -713,14 +823,31 @@ export const UploadForm: React.FC = () => {
         }
       }
       
-      // Method 3: If we still don't have columns, look for common GIS column names
-      if (columns.size === 0) {
-        console.log('No columns detected from GDB files, using common GIS column patterns');
-        const commonColumns = ['OBJECTID', 'Shape', 'SHAPE', 'FID', 'geometry'];
-        commonColumns.forEach(col => columns.add(col));
+      // Look for .spx files which might contain field names
+      const spxFiles = gdbFiles.filter(f => f.name.endsWith('.spx'));
+      for (const spxFile of spxFiles) {
+        const fileName = spxFile.name.split('/').pop()?.replace('.spx', '') || '';
+        if (fileName && !fileName.startsWith('a0000')) {
+          // File name might be a table name, but we can't get fields from it
+          console.log(`Found potential table: ${fileName}`);
+        }
       }
       
-      return Array.from(columns);
+      // If we found some columns, return them
+      if (columns.size > 0) {
+        console.log('Extracted columns from GDB metadata:', Array.from(columns));
+        return Array.from(columns);
+      }
+      
+      // If no columns found, prompt user that manual input is needed
+      console.warn('⚠️ Could not automatically extract column names from .gdb files.');
+      console.warn('File geodatabases are proprietary format. Please use one of these methods:');
+      console.warn('1. Enter column names manually in the next dialog');
+      console.warn('2. Export to CSV/Shapefile from ArcGIS Pro first');
+      console.warn('3. Include a metadata.json file with column definitions');
+      
+      // Return empty array - will trigger manual input or schema validation
+      return [];
       
     } catch (error) {
       console.error('Error analyzing geodatabase columns:', error);
@@ -751,32 +878,6 @@ export const UploadForm: React.FC = () => {
       reader.onerror = () => reject(new Error('Failed to read file'));
       reader.readAsText(file);
     });
-  };
-
-  // Extract possible column names from binary data
-  const extractPossibleColumnNames = (text: string): string[] => {
-    const columns: string[] = [];
-    
-    // Common GIS field name patterns
-    const patterns = [
-      /\b[A-Z][A-Z_]{2,20}\b/g, // All caps field names like OBJECTID, SHAPE_AREA
-      /\b[a-z][a-z_]{2,20}\b/g, // Lowercase field names
-      /\b[A-Za-z][A-Za-z0-9_]{2,20}\b/g // Mixed case field names
-    ];
-    
-    for (const pattern of patterns) {
-      const matches = text.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          // Filter out common non-column words
-          if (!['the', 'and', 'for', 'with', 'from', 'data', 'file', 'table'].includes(match.toLowerCase())) {
-            columns.push(match);
-          }
-        });
-      }
-    }
-    
-    return [...new Set(columns)]; // Remove duplicates
   };
 
   // Extract column information from XML metadata
@@ -897,6 +998,7 @@ export const UploadForm: React.FC = () => {
       reader.readAsText(file);
     });
   };
+
   // Fetch column schema for a specific table using Accept-Profile header
   const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
     try {
@@ -955,6 +1057,7 @@ export const UploadForm: React.FC = () => {
       return [];
     }
   };
+
   const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
     try {
       const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
@@ -986,6 +1089,7 @@ export const UploadForm: React.FC = () => {
       throw error;
     }
   };
+
   const createZipFile = async (): Promise<Blob> => {
     // Import JSZip dynamically to avoid SSR issues
     const JSZip = (await import('jszip')).default;
@@ -1039,12 +1143,27 @@ export const UploadForm: React.FC = () => {
       
       // 3. Analyze uploaded files for column names
       const columns = await analyzeFileColumns(formData.selectedFiles);
-      setSourceColumns(columns);
       
-      if (columns.length === 0) {
-        setUploadMessage('Could not detect column names from uploaded files. You may need to upload CSV files or files with detectable schemas.');
+      // Check if we have a geodatabase
+      const hasGDB = formData.selectedFiles.some(f => f.name.includes('.gdb/'));
+      
+      if (columns.length === 0 && hasGDB) {
+        // Show manual input modal for GDB files if GDAL service couldn't extract columns
+        setShowManualColumnInput(true);
+        setUploadMessage('Could not automatically extract columns from geodatabase. Please enter them manually.');
+        return;
+      } else if (columns.length === 0) {
+        setUploadMessage('Could not detect column names from uploaded files. Please upload CSV files or enter columns manually.');
+        setShowManualColumnInput(true);
         return;
       }
+      
+      // If we successfully got columns from GDAL service
+      if (hasGDB && columns.length > 0) {
+        setUploadMessage(`✅ Successfully extracted ${columns.length} columns from geodatabase using GDAL`);
+      }
+      
+      setSourceColumns(columns);
       
       // 4. Show schema mapping interface
       setShowSchemaMapping(true);
@@ -1080,6 +1199,7 @@ export const UploadForm: React.FC = () => {
       setColumnMapping(newMapping);
     }
   };
+
   // Handle form submission
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -1222,9 +1342,25 @@ export const UploadForm: React.FC = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">Manual Column Entry</h2>
-            <p className="text-gray-600 mb-4">
-              File geodatabase detected! Please enter the column names from your .gdb file separated by commas:
-            </p>
+            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+              <p className="text-yellow-800 font-semibold mb-2">
+                📁 File Geodatabase Detected
+              </p>
+              <p className="text-yellow-700 text-sm">
+                File geodatabases (.gdb) are a proprietary Esri format. Column names cannot be automatically extracted in the browser.
+              </p>
+            </div>
+            
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+              <p className="text-blue-800 font-semibold mb-2">How to get your column names:</p>
+              <ol className="text-blue-700 text-sm list-decimal list-inside space-y-1">
+                <li>Open your .gdb in <strong>ArcGIS Pro</strong> or <strong>QGIS</strong></li>
+                <li>Right-click the layer → <strong>Open Attribute Table</strong></li>
+                <li>Copy the field names from the table headers</li>
+                <li>Paste them below, separated by commas</li>
+              </ol>
+            </div>
+            
             <div className="mb-4">
               <label htmlFor="columnInput" className="block text-gray-700 font-semibold mb-2">
                 Column Names:
@@ -1234,22 +1370,38 @@ export const UploadForm: React.FC = () => {
                 value={manualColumnInput}
                 onChange={(e) => setManualColumnInput(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                rows={3}
-                placeholder="objectid,shape,unit_name,age,description,lithology"
+                rows={4}
+                placeholder="OBJECTID, Shape, unit_name, age, description, lithology, map_unit_polygon_id"
               />
               <p className="text-xs text-gray-500 mt-1">
-                Enter column names separated by commas. You can find these in ArcGIS Pro or another GIS application.
+                Enter column names separated by commas. Common GIS fields include: OBJECTID, Shape, FID, geometry
               </p>
             </div>
+            
+            <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-md">
+              <p className="text-gray-700 text-sm font-semibold mb-1">💡 Alternative Options:</p>
+              <ul className="text-gray-600 text-xs space-y-1">
+                <li>• Export your data to <strong>CSV</strong> or <strong>Shapefile</strong> from ArcGIS first</li>
+                <li>• Include a <strong>metadata.json</strong> file with column definitions</li>
+                <li>• Use <strong>GDAL/OGR</strong> tools to convert to an open format</li>
+              </ul>
+            </div>
+            
             <div className="flex justify-end gap-3">
               <button
                 onClick={handleManualColumnCancel}
                 className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
               >
-                Skip Column Mapping
+                Cancel
               </button>
               <button
-                onClick={handleManualColumnSubmit}
+                onClick={() => {
+                  handleManualColumnSubmit();
+                  // After setting columns, show the schema mapping
+                  if (manualColumnInput.trim()) {
+                    setShowSchemaMapping(true);
+                  }
+                }}
                 disabled={!manualColumnInput.trim()}
                 className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
