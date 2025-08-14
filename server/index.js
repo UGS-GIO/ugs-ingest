@@ -9,6 +9,12 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// Increase payload limit for file uploads through proxy
+app.use(express.raw({ 
+  type: 'multipart/form-data', 
+  limit: '100mb' 
+}));
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')));
 
@@ -32,6 +38,58 @@ app.get('/api/user', (req, res) => {
   });
 });
 
+// Proxy endpoint for GDAL microservice
+app.post('/api/gdal-proxy/*', async (req, res) => {
+  try {
+    const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
+    
+    // Use internal URL when running on Cloud Run
+    const isCloudRun = process.env.K_SERVICE !== undefined;
+    const gdalUrl = isCloudRun 
+      ? `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`
+      : `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`;
+    
+    console.log(`Proxying GDAL request to: ${gdalUrl}`);
+    
+    // Get the raw body from the request
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks);
+    
+    // Forward the request to GDAL microservice
+    // When running on Cloud Run, the service account auth is automatic
+    const gdalResponse = await fetch(gdalUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': req.headers['content-type'] || 'multipart/form-data',
+        'Content-Length': body.length.toString(),
+      },
+      body: body
+    });
+    
+    if (!gdalResponse.ok) {
+      const errorText = await gdalResponse.text();
+      console.error('GDAL service error:', gdalResponse.status, errorText);
+      return res.status(gdalResponse.status).json({ 
+        error: 'GDAL service error', 
+        details: errorText 
+      });
+    }
+    
+    const result = await gdalResponse.json();
+    res.json(result);
+    
+  } catch (error) {
+    console.error('GDAL proxy error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process GDAL request',
+      details: error.message 
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
@@ -48,4 +106,5 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Running on Cloud Run: ${process.env.K_SERVICE !== undefined}`);
 });

@@ -678,7 +678,8 @@ export const UploadForm: React.FC = () => {
 
   // Analyze geodatabase using GDAL microservice - FIXED VERSION
   const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<string[]> => {
-    const GDAL_SERVICE_URL = 'https://gdal-microservice-534590904912.us-central1.run.app';
+    // Use proxy endpoint instead of direct URL
+    const GDAL_SERVICE_URL = '/api/gdal-proxy';
     
     try {
       console.log('🔍 Using GDAL microservice to analyze geodatabase...');
