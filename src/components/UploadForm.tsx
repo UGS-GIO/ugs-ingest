@@ -676,14 +676,14 @@ export const UploadForm: React.FC = () => {
     return Array.from(allColumns);
   };
 
-  // Analyze geodatabase using GDAL microservice
+  // Analyze geodatabase using GDAL microservice - FIXED VERSION
   const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<string[]> => {
     const GDAL_SERVICE_URL = 'https://gdal-microservice-534590904912.us-central1.run.app';
     
     try {
       console.log('🔍 Using GDAL microservice to analyze geodatabase...');
       
-      // We need to create a zip of the .gdb folder to send to the service
+      // Create a zip of the .gdb folder to send to the service
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
       
@@ -706,42 +706,158 @@ export const UploadForm: React.FC = () => {
       // Generate zip blob
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       
-      // Create form data to upload to GDAL service
-      const formData = new FormData();
-      formData.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
-      formData.append('command', 'ogrinfo');
-      // Use -al for all layers, -so for summary only (no features)
-      formData.append('args', JSON.stringify(['-al', '-so', gdbFolderName]));
+      // Step 1: Get list of layers/tables in the geodatabase
+      console.log('Step 1: Discovering layers in geodatabase...');
       
-      // Upload and execute
-      const response = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
+      const formData1 = new FormData();
+      formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
+      formData1.append('command', 'ogrinfo');
+      // Just list the layers, use -json for easier parsing
+      formData1.append('args', JSON.stringify(['-json', gdbFolderName]));
+      
+      const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
         method: 'POST',
-        body: formData
+        body: formData1
       });
       
-      if (!response.ok) {
-        throw new Error(`GDAL service returned ${response.status}`);
+      if (!response1.ok) {
+        throw new Error(`GDAL service returned ${response1.status}`);
       }
       
-      const result = await response.json();
-      console.log('GDAL service response:', result);
+      const result1 = await response1.json();
       
-      if (result.success && result.stdout) {
-        // Parse ogrinfo output to extract field names
-        return parseOgrInfoOutput(result.stdout);
-      } else {
-        console.error('GDAL command failed:', result.stderr);
+      if (!result1.success || !result1.stdout) {
+        console.error('Failed to list layers:', result1.stderr);
         return [];
       }
       
+      // Parse the JSON output to get layer names
+      let layers: string[] = [];
+      try {
+        const gdbInfo = JSON.parse(result1.stdout);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        layers = gdbInfo.layers?.map((layer: any) => layer.name) || [];
+        console.log(`Found ${layers.length} layers:`, layers);
+      } catch (e) {
+        console.error('Failed to parse layer list JSON:', e);
+        // Fallback: try to parse non-JSON output
+        layers = parseLayerListFallback(result1.stdout);
+      }
+      
+      if (layers.length === 0) {
+        console.warn('No layers found in geodatabase');
+        return [];
+      }
+      
+      // Step 2: Get schema for each layer
+      const allColumns = new Set<string>();
+      
+      for (const layerName of layers) {
+        console.log(`Step 2: Getting schema for layer "${layerName}"...`);
+        
+        const formData2 = new FormData();
+        formData2.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
+        formData2.append('command', 'ogrinfo');
+        // Get schema only (-so) for specific layer, in JSON format
+        formData2.append('args', JSON.stringify(['-json', '-so', gdbFolderName, layerName]));
+        
+        const response2 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
+          method: 'POST',
+          body: formData2
+        });
+        
+        if (!response2.ok) {
+          console.error(`Failed to get schema for layer ${layerName}`);
+          continue;
+        }
+        
+        const result2 = await response2.json();
+        
+        if (result2.success && result2.stdout) {
+          try {
+            // Parse the JSON output to extract field names
+            const layerInfo = JSON.parse(result2.stdout);
+            const fields = layerInfo.layers?.[0]?.fields || [];
+            
+            for (const field of fields) {
+              if (field.name) {
+                allColumns.add(field.name);
+                console.log(`  Found field: ${field.name} (${field.type})`);
+              }
+            }
+            
+            // Also check for geometry column
+            if (layerInfo.layers?.[0]?.geometryFields) {
+              for (const geomField of layerInfo.layers[0].geometryFields) {
+                if (geomField.name) {
+                  allColumns.add(geomField.name);
+                  console.log(`  Found geometry field: ${geomField.name}`);
+                }
+              }
+            }
+          } catch (e) {
+            console.error(`Failed to parse schema JSON for layer ${layerName}:`, e);
+            // Fallback to text parsing
+            const columns = parseOgrInfoOutput(result2.stdout);
+            columns.forEach(col => allColumns.add(col));
+          }
+        }
+      }
+      
+      // Add common GIS fields if we found any columns
+      if (allColumns.size > 0) {
+        // These are often implicit in geodatabases
+        const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
+        for (const field of commonFields) {
+          if (!Array.from(allColumns).some(col => col.toUpperCase() === field.toUpperCase())) {
+            // Only add if not already present (case-insensitive check)
+            console.log(`Adding common field: ${field}`);
+            allColumns.add(field);
+          }
+        }
+      }
+      
+      const columnArray = Array.from(allColumns);
+      console.log(`✅ Extracted ${columnArray.length} unique columns from geodatabase:`, columnArray);
+      return columnArray;
+      
     } catch (error) {
       console.error('Error using GDAL microservice:', error);
-      // Don't throw - let it fall back to other methods
       return [];
     }
   };
 
-  // Parse ogrinfo output to extract field names
+  // Fallback parser for non-JSON layer list output
+  const parseLayerListFallback = (output: string): string[] => {
+    const layers: string[] = [];
+    const lines = output.split('\n');
+    
+    // Look for lines that start with a number followed by a colon (layer listing format)
+    // Example: "1: LayerName (Polygon)"
+    const layerPattern = /^\d+:\s+([^\s(]+)/;
+    
+    for (const line of lines) {
+      const match = line.match(layerPattern);
+      if (match && match[1]) {
+        layers.push(match[1]);
+      }
+    }
+    
+    // Alternative pattern: "Layer name: LayerName"
+    if (layers.length === 0) {
+      const altPattern = /^Layer name:\s+(.+)$/i;
+      for (const line of lines) {
+        const match = line.match(altPattern);
+        if (match && match[1]) {
+          layers.push(match[1].trim());
+        }
+      }
+    }
+    
+    return layers;
+  };
+
+  // Parse ogrinfo output to extract field names (fallback for non-JSON output)
   const parseOgrInfoOutput = (output: string): string[] => {
     const columns = new Set<string>();
     
@@ -755,15 +871,15 @@ export const UploadForm: React.FC = () => {
     
     for (const line of lines) {
       // Check if we're in a layer section
-      if (line.startsWith('Layer name:')) {
+      if (line.startsWith('Layer name:') || line.includes('Feature Count:')) {
         inLayerSection = true;
         continue;
       }
       
       // Look for field definitions (they have a colon followed by a type)
       if (inLayerSection && line.includes(':')) {
-        // Match pattern: "field_name: Type"
-        const match = line.match(/^([^:]+):\s*(String|Integer|Integer64|Real|Date|DateTime|Binary|Geometry)/i);
+        // Match pattern: "field_name: Type" or "field_name (FieldAlias): Type"
+        const match = line.match(/^([^:(]+)(?:\s*\([^)]*\))?\s*:\s*(String|Integer|Integer64|Real|Date|DateTime|Binary|Geometry|Text|Double|Float)/i);
         if (match) {
           const fieldName = match[1].trim();
           // Skip metadata fields
@@ -772,28 +888,16 @@ export const UploadForm: React.FC = () => {
               !fieldName.startsWith('Feature Count') &&
               !fieldName.startsWith('Extent') &&
               !fieldName.startsWith('SRS') &&
-              !fieldName.startsWith('FID')) {
+              !fieldName.startsWith('FID Column') &&
+              !fieldName.startsWith('Geometry Column') &&
+              fieldName.length > 0) {
             columns.add(fieldName);
           }
         }
       }
     }
     
-    // Always include common GIS fields if we found any columns
-    if (columns.size > 0) {
-      // Add Shape/geometry field as it's often implicit
-      if (!Array.from(columns).some(col => col.toLowerCase() === 'shape' || col.toLowerCase() === 'geometry')) {
-        columns.add('Shape');
-      }
-      // OBJECTID is usually present
-      if (!Array.from(columns).some(col => col.toUpperCase() === 'OBJECTID')) {
-        columns.add('OBJECTID');
-      }
-    }
-    
-    const columnArray = Array.from(columns);
-    console.log(`✅ Extracted ${columnArray.length} columns from geodatabase:`, columnArray);
-    return columnArray;
+    return Array.from(columns);
   };
 
   // Analyze geodatabase files to extract column names (fallback method)
@@ -2040,7 +2144,7 @@ export const UploadForm: React.FC = () => {
             and file details. A metadata.json file will be included in the zip with complete audit information.
           </p>
         </div>
-      </form>
+      </form> 
     </div>
   );
 };
