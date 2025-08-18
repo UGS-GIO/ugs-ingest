@@ -844,6 +844,7 @@ export const UploadForm: React.FC = () => {
   };
 
   // Parse ogrinfo output to extract field names (fallback for non-JSON output)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const parseOgrInfoOutput = (output: string): string[] => {
     const columns = new Set<string>();
     
