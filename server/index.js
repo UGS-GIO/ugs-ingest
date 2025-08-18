@@ -51,15 +51,21 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     console.log(`Proxying GDAL request to: ${gdalUrl}`);
     
     // Get an ID token for service-to-service authentication
-    let idToken = '';
+    let authHeader = '';
     try {
       const client = await auth.getIdTokenClient(gdalUrl);
       const headers = await client.getRequestHeaders();
-      idToken = headers['Authorization'] || '';
+      authHeader = headers['Authorization'] || '';
+      
+      // Debug: Log token format (first 20 chars only for security)
+      console.log('Auth header format:', authHeader.substring(0, 20) + '...');
       console.log('Successfully obtained ID token for GDAL service');
     } catch (authError) {
       console.error('Failed to get ID token:', authError);
-      // If we can't get a token, try anyway (might work if service allows unauthenticated)
+      return res.status(500).json({ 
+        error: 'Authentication failed', 
+        details: authError.message 
+      });
     }
     
     // Get the raw body from the request
@@ -75,10 +81,15 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
       'Content-Length': body.length.toString(),
     };
     
-    // Add authorization header if we have a token
-    if (idToken) {
-      headers['Authorization'] = idToken;
+    // Add authorization header
+    if (authHeader) {
+      headers['Authorization'] = authHeader;
+    } else {
+      console.error('No authorization header available');
+      return res.status(500).json({ error: 'No authorization token available' });
     }
+    
+    console.log('Request headers being sent:', Object.keys(headers));
     
     // Forward the request to GDAL microservice
     const gdalResponse = await fetch(gdalUrl, {
@@ -86,6 +97,9 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
       headers: headers,
       body: body
     });
+    
+    console.log('GDAL response status:', gdalResponse.status);
+    console.log('GDAL response headers:', Object.fromEntries(gdalResponse.headers.entries()));
     
     if (!gdalResponse.ok) {
       const errorText = await gdalResponse.text();
