@@ -43,6 +43,7 @@ app.get('/api/user', (req, res) => {
 });
 
 // Proxy endpoint for GDAL microservice with authentication
+// Proxy endpoint for GDAL microservice with authentication
 app.post('/api/gdal-proxy/*', async (req, res) => {
   try {
     const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
@@ -51,21 +52,17 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     console.log(`Proxying GDAL request to: ${gdalUrl}`);
     
     // Get an ID token for service-to-service authentication
-    let authHeader = '';
+    let idToken = '';
     try {
       const client = await auth.getIdTokenClient(gdalUrl);
       const headers = await client.getRequestHeaders();
-      authHeader = headers['Authorization'] || '';
-      
-      // Debug: Log token format (first 20 chars only for security)
-      console.log('Auth header format:', authHeader.substring(0, 20) + '...');
+      idToken = headers['Authorization'] || '';
       console.log('Successfully obtained ID token for GDAL service');
+      console.log('ID Token (first 50 chars):', idToken.substring(0, 50));
+      console.log('Auth headers:', headers);
     } catch (authError) {
       console.error('Failed to get ID token:', authError);
-      return res.status(500).json({ 
-        error: 'Authentication failed', 
-        details: authError.message 
-      });
+      return res.status(500).json({ error: 'Authentication failed', details: authError.message });
     }
     
     // Get the raw body from the request
@@ -76,25 +73,22 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     const body = Buffer.concat(chunks);
     
     // Prepare headers for the GDAL service
-    const headers = {
+    const requestHeaders = {
       'Content-Type': req.headers['content-type'] || 'multipart/form-data',
       'Content-Length': body.length.toString(),
     };
     
-    // Add authorization header
-    if (authHeader) {
-      headers['Authorization'] = authHeader;
-    } else {
-      console.error('No authorization header available');
-      return res.status(500).json({ error: 'No authorization token available' });
+    // Add authorization header if we have a token
+    if (idToken) {
+      requestHeaders['Authorization'] = idToken;
     }
     
-    console.log('Request headers being sent:', Object.keys(headers));
+    console.log('Request headers being sent to GDAL:', requestHeaders);
     
     // Forward the request to GDAL microservice
     const gdalResponse = await fetch(gdalUrl, {
       method: 'POST',
-      headers: headers,
+      headers: requestHeaders,
       body: body
     });
     
