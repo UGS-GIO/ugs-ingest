@@ -844,48 +844,47 @@ export const UploadForm: React.FC = () => {
   };
 
   // Parse ogrinfo output to extract field names (fallback for non-JSON output)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const parseOgrInfoOutput = (output: string): string[] => {
-    const columns = new Set<string>();
+  // const parseOgrInfoOutput = (output: string): string[] => {
+  //   const columns = new Set<string>();
     
-    // ogrinfo output format for fields:
-    // OBJECTID: Integer64 (0.0)
-    // Shape: Geometry
-    // field_name: String (255.0)
+  //   // ogrinfo output format for fields:
+  //   // OBJECTID: Integer64 (0.0)
+  //   // Shape: Geometry
+  //   // field_name: String (255.0)
     
-    const lines = output.split('\n');
-    let inLayerSection = false;
+  //   const lines = output.split('\n');
+  //   let inLayerSection = false;
     
-    for (const line of lines) {
-      // Check if we're in a layer section
-      if (line.startsWith('Layer name:') || line.includes('Feature Count:')) {
-        inLayerSection = true;
-        continue;
-      }
+  //   for (const line of lines) {
+  //     // Check if we're in a layer section
+  //     if (line.startsWith('Layer name:') || line.includes('Feature Count:')) {
+  //       inLayerSection = true;
+  //       continue;
+  //     }
       
-      // Look for field definitions (they have a colon followed by a type)
-      if (inLayerSection && line.includes(':')) {
-        // Match pattern: "field_name: Type" or "field_name (FieldAlias): Type"
-        const match = line.match(/^([^:(]+)(?:\s*\([^)]*\))?\s*:\s*(String|Integer|Integer64|Real|Date|DateTime|Binary|Geometry|Text|Double|Float)/i);
-        if (match) {
-          const fieldName = match[1].trim();
-          // Skip metadata fields
-          if (!fieldName.startsWith('Layer') && 
-              !fieldName.startsWith('Geometry') && 
-              !fieldName.startsWith('Feature Count') &&
-              !fieldName.startsWith('Extent') &&
-              !fieldName.startsWith('SRS') &&
-              !fieldName.startsWith('FID Column') &&
-              !fieldName.startsWith('Geometry Column') &&
-              fieldName.length > 0) {
-            columns.add(fieldName);
-          }
-        }
-      }
-    }
+  //     // Look for field definitions (they have a colon followed by a type)
+  //     if (inLayerSection && line.includes(':')) {
+  //       // Match pattern: "field_name: Type" or "field_name (FieldAlias): Type"
+  //       const match = line.match(/^([^:(]+)(?:\s*\([^)]*\))?\s*:\s*(String|Integer|Integer64|Real|Date|DateTime|Binary|Geometry|Text|Double|Float)/i);
+  //       if (match) {
+  //         const fieldName = match[1].trim();
+  //         // Skip metadata fields
+  //         if (!fieldName.startsWith('Layer') && 
+  //             !fieldName.startsWith('Geometry') && 
+  //             !fieldName.startsWith('Feature Count') &&
+  //             !fieldName.startsWith('Extent') &&
+  //             !fieldName.startsWith('SRS') &&
+  //             !fieldName.startsWith('FID Column') &&
+  //             !fieldName.startsWith('Geometry Column') &&
+  //             fieldName.length > 0) {
+  //           columns.add(fieldName);
+  //         }
+  //       }
+  //     }
+  //   }
     
-    return Array.from(columns);
-  };
+  //   return Array.from(columns);
+  // };
 
   // Analyze geodatabase files to extract column names (fallback method)
   const analyzeGdbColumns = async (allFiles: File[]): Promise<string[]> => {
