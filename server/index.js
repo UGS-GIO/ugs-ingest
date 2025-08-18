@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { GoogleAuth } from 'google-auth-library';
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -8,6 +9,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// Initialize Google Auth client for service-to-service authentication
+const auth = new GoogleAuth();
 
 // Increase payload limit for file uploads through proxy
 app.use(express.raw({ 
@@ -38,18 +42,25 @@ app.get('/api/user', (req, res) => {
   });
 });
 
-// Proxy endpoint for GDAL microservice
+// Proxy endpoint for GDAL microservice with authentication
 app.post('/api/gdal-proxy/*', async (req, res) => {
   try {
     const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
-    
-    // Use internal URL when running on Cloud Run
-    const isCloudRun = process.env.K_SERVICE !== undefined;
-    const gdalUrl = isCloudRun 
-      ? `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`
-      : `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`;
+    const gdalUrl = `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`;
     
     console.log(`Proxying GDAL request to: ${gdalUrl}`);
+    
+    // Get an ID token for service-to-service authentication
+    let idToken = '';
+    try {
+      const client = await auth.getIdTokenClient(gdalUrl);
+      const headers = await client.getRequestHeaders();
+      idToken = headers['Authorization'] || '';
+      console.log('Successfully obtained ID token for GDAL service');
+    } catch (authError) {
+      console.error('Failed to get ID token:', authError);
+      // If we can't get a token, try anyway (might work if service allows unauthenticated)
+    }
     
     // Get the raw body from the request
     const chunks = [];
@@ -58,14 +69,21 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     }
     const body = Buffer.concat(chunks);
     
+    // Prepare headers for the GDAL service
+    const headers = {
+      'Content-Type': req.headers['content-type'] || 'multipart/form-data',
+      'Content-Length': body.length.toString(),
+    };
+    
+    // Add authorization header if we have a token
+    if (idToken) {
+      headers['Authorization'] = idToken;
+    }
+    
     // Forward the request to GDAL microservice
-    // When running on Cloud Run, the service account auth is automatic
     const gdalResponse = await fetch(gdalUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': req.headers['content-type'] || 'multipart/form-data',
-        'Content-Length': body.length.toString(),
-      },
+      headers: headers,
       body: body
     });
     
@@ -74,6 +92,7 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
       console.error('GDAL service error:', gdalResponse.status, errorText);
       return res.status(gdalResponse.status).json({ 
         error: 'GDAL service error', 
+        status: gdalResponse.status,
         details: errorText 
       });
     }
@@ -107,4 +126,5 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Running on Cloud Run: ${process.env.K_SERVICE !== undefined}`);
+  console.log(`Service Account: ${process.env.K_SERVICE ? 'Will use metadata service' : 'Local development'}`);
 });
