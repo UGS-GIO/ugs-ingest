@@ -758,59 +758,36 @@ export const UploadForm: React.FC = () => {
         return [];
       }
       
-      // Step 2: Get schema for each layer
+      // Step 2: Extract fields from the layer information we already have
       const allColumns = new Set<string>();
-      
-      for (const layerName of layers) {
-        console.log(`Step 2: Getting schema for layer "${layerName}"...`);
+
+      try {
+        const gdbInfo = JSON.parse(result1.stdout);
+        const layers = gdbInfo.layers || [];
         
-        const formData2 = new FormData();
-        formData2.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
-        formData2.append('command', 'ogrinfo');
-        // Get schema only (-so) for specific layer, in JSON format
-        formData2.append('args', JSON.stringify(['-json', '-so', gdbFolderName, layerName]));
-        
-        const response2 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
-          method: 'POST',
-          body: formData2
-        });
-        
-        if (!response2.ok) {
-          console.error(`Failed to get schema for layer ${layerName}`);
-          continue;
-        }
-        
-        const result2 = await response2.json();
-        
-        if (result2.success && result2.stdout) {
-          try {
-            // Parse the JSON output to extract field names
-            const layerInfo = JSON.parse(result2.stdout);
-            const fields = layerInfo.layers?.[0]?.fields || [];
-            
-            for (const field of fields) {
-              if (field.name) {
-                allColumns.add(field.name);
-                console.log(`  Found field: ${field.name} (${field.type})`);
-              }
+        for (const layer of layers) {
+          console.log(`Extracting fields from layer "${layer.name}"...`);
+          
+          // Extract regular fields
+          const fields = layer.fields || [];
+          for (const field of fields) {
+            if (field.name) {
+              allColumns.add(field.name);
+              console.log(`  Found field: ${field.name} (${field.type})`);
             }
-            
-            // Also check for geometry column
-            if (layerInfo.layers?.[0]?.geometryFields) {
-              for (const geomField of layerInfo.layers[0].geometryFields) {
-                if (geomField.name) {
-                  allColumns.add(geomField.name);
-                  console.log(`  Found geometry field: ${geomField.name}`);
-                }
-              }
+          }
+          
+          // Extract geometry fields
+          const geometryFields = layer.geometryFields || [];
+          for (const geomField of geometryFields) {
+            if (geomField.name) {
+              allColumns.add(geomField.name);
+              console.log(`  Found geometry field: ${geomField.name}`);
             }
-          } catch (e) {
-            console.error(`Failed to parse schema JSON for layer ${layerName}:`, e);
-            // Fallback to text parsing
-            const columns = parseOgrInfoOutput(result2.stdout);
-            columns.forEach(col => allColumns.add(col));
           }
         }
+      } catch (e) {
+        console.error('Failed to extract fields from layer list:', e);
       }
       
       // Add common GIS fields if we found any columns
