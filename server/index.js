@@ -13,12 +13,6 @@ const PORT = process.env.PORT || 8080;
 // Initialize Google Auth client for service-to-service authentication
 const auth = new GoogleAuth();
 
-// Increase payload limit for file uploads through proxy
-app.use(express.raw({ 
-  type: 'multipart/form-data', 
-  limit: '100mb' 
-}));
-
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')));
 
@@ -43,6 +37,7 @@ app.get('/api/user', (req, res) => {
 });
 
 // Proxy endpoint for GDAL microservice with authentication
+// IMPORTANT: This route must come BEFORE the express.raw middleware
 app.post('/api/gdal-proxy/*', async (req, res) => {
   try {
     const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
@@ -62,7 +57,6 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
       console.error('Failed to get ID token:', authError);
       // If we can't get a token, try anyway (might work if service allows unauthenticated)
     }
-    
     
     // Collect the request body while preserving multipart data
     const chunks = [];
@@ -120,6 +114,13 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     });
   }
 });
+
+// NOW apply the middleware for other routes that might need it
+// This middleware will NOT affect the GDAL proxy route above
+app.use(express.raw({ 
+  type: 'multipart/form-data', 
+  limit: '100mb' 
+}));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
