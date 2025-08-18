@@ -51,13 +51,13 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     console.log(`Proxying GDAL request to: ${gdalUrl}`);
     
     // Get an ID token for service-to-service authentication
-    let authHeaders = {};
+    let idToken = '';
     try {
       const client = await auth.getIdTokenClient(gdalUrl);
-      const requestHeaders = await client.getRequestHeaders();
-      authHeaders = requestHeaders; // This already contains the Authorization header
+      const token = await client.idTokenProvider.fetchIdToken(gdalUrl);
+      idToken = token;
       console.log('Successfully obtained ID token for GDAL service');
-      console.log('Auth headers:', Object.keys(authHeaders));
+      console.log('Token length:', idToken.length);
     } catch (authError) {
       console.error('Failed to get ID token:', authError);
       // If we can't get a token, try anyway (might work if service allows unauthenticated)
@@ -74,11 +74,16 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     const headers = {
       'Content-Type': req.headers['content-type'] || 'multipart/form-data',
       'Content-Length': body.length.toString(),
-      ...authHeaders // Spread the auth headers which includes Authorization
     };
+    
+    // Add authorization header if we have a token
+    if (idToken) {
+      headers['Authorization'] = `Bearer ${idToken}`;
+    }
     
     console.log('Request headers being sent:', Object.keys(headers));
     console.log('Has Authorization header:', 'Authorization' in headers);
+    console.log('Authorization header starts with:', headers['Authorization'] ? headers['Authorization'].substring(0, 20) : 'none');
     
     // Forward the request to GDAL microservice
     const gdalResponse = await fetch(gdalUrl, {
