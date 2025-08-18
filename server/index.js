@@ -45,21 +45,22 @@ app.get('/api/user', (req, res) => {
 // Proxy endpoint for GDAL microservice with authentication
 app.post('/api/gdal-proxy/*', async (req, res) => {
   try {
-    const gdalPath = req.params[0] || '';
+    const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
     const gdalUrl = `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`;
     
     console.log(`Proxying GDAL request to: ${gdalUrl}`);
     
     // Get an ID token for service-to-service authentication
-    let idToken = '';
+    let authHeaders = {};
     try {
       const client = await auth.getIdTokenClient(gdalUrl);
-      const headers = await client.getRequestHeaders();
-      idToken = headers['Authorization'] || '';
+      const requestHeaders = await client.getRequestHeaders();
+      authHeaders = requestHeaders; // This already contains the Authorization header
       console.log('Successfully obtained ID token for GDAL service');
-      console.log('Token starts with:', idToken.substring(0, 20));
+      console.log('Auth headers:', Object.keys(authHeaders));
     } catch (authError) {
       console.error('Failed to get ID token:', authError);
+      // If we can't get a token, try anyway (might work if service allows unauthenticated)
     }
     
     // Get the raw body from the request
@@ -73,15 +74,11 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     const headers = {
       'Content-Type': req.headers['content-type'] || 'multipart/form-data',
       'Content-Length': body.length.toString(),
+      ...authHeaders // Spread the auth headers which includes Authorization
     };
     
-    // Add authorization header if we have a token
-    if (idToken) {
-      headers['Authorization'] = idToken;
-    }
-    
     console.log('Request headers being sent:', Object.keys(headers));
-    console.log('Has Authorization header:', !!headers['Authorization']);
+    console.log('Has Authorization header:', 'Authorization' in headers);
     
     // Forward the request to GDAL microservice
     const gdalResponse = await fetch(gdalUrl, {
@@ -91,11 +88,12 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     });
     
     console.log('GDAL response status:', gdalResponse.status);
-    console.log('GDAL response headers:', Object.fromEntries(gdalResponse.headers.entries()));
+    console.log('GDAL response headers:', Object.fromEntries(gdalResponse.headers));
     
     if (!gdalResponse.ok) {
       const errorText = await gdalResponse.text();
-      console.error('GDAL service error details:', errorText);
+      console.error('GDAL service error details:');
+      console.error(errorText);
       return res.status(gdalResponse.status).json({ 
         error: 'GDAL service error', 
         status: gdalResponse.status,
