@@ -34,6 +34,14 @@ interface ColumnInfo {
   position: number;
 }
 
+// Layer information interface
+interface LayerInfo {
+  name: string;
+  fields: string[];
+  featureCount: string | number;
+  geometryType: string;
+}
+
 declare global {
   interface Window {
     showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
@@ -149,6 +157,11 @@ export const UploadForm: React.FC = () => {
   const [availableTables, setAvailableTables] = useState<TableInfo[]>([]);
   const [showManualColumnInput, setShowManualColumnInput] = useState<boolean>(false);
   const [manualColumnInput, setManualColumnInput] = useState<string>('');
+
+  // New state for layer selection
+  const [sourceLayerInfo, setSourceLayerInfo] = useState<LayerInfo[]>([]);
+  const [selectedSourceLayer, setSelectedSourceLayer] = useState<string>('');
+  const [showLayerSelection, setShowLayerSelection] = useState<boolean>(false);
 
   // State for validation errors
   const [errors, setErrors] = useState<FormErrors>({});
@@ -534,6 +547,7 @@ export const UploadForm: React.FC = () => {
       // Schema validation and mapping (if applicable)
       schemaValidation: formData.loadType !== 'full' ? {
         targetTable: selectedTable,
+        sourceLayer: selectedSourceLayer, // Include selected layer
         sourceColumns: sourceColumns,
         columnMapping: columnMapping,
         validationCompleted: showSchemaMapping ? false : Object.keys(columnMapping).length > 0
@@ -631,71 +645,22 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Analyze files to extract column names
-  const analyzeFileColumns = async (files: File[]): Promise<string[]> => {
-    const allColumns = new Set<string>();
-
-    // Check if we have a geodatabase
-    const hasGDB = files.some(f => f.name.includes('.gdb/'));
-    
-    if (hasGDB) {
-      // Try to extract columns using GDAL microservice
-      try {
-        const gdbColumns = await analyzeGdbColumnsWithGDAL(files);
-        gdbColumns.forEach(col => allColumns.add(col));
-        if (gdbColumns.length > 0) {
-          return Array.from(allColumns);
-        }
-      } catch (error) {
-        console.error('Failed to analyze GDB with GDAL service:', error);
-        // Fall back to other methods if GDAL service fails
-      }
-    }
-
-    // Process other file types
-    for (const file of files) {
-      try {
-        if (file.name.toLowerCase().endsWith('.csv')) {
-          const columns = await analyzeCsvColumns(file);
-          columns.forEach(col => allColumns.add(col));
-        } else if (file.name.toLowerCase().endsWith('.dbf')) {
-          console.log('DBF file detected:', file.name);
-          const columns = await analyzeDbfColumns(file);
-          columns.forEach(col => allColumns.add(col));
-        } else if (file.name.includes('.gdb/')) {
-          console.log('GDB file detected:', file.name);
-          // Try local extraction as fallback
-          const columns = await analyzeGdbColumns(files);
-          columns.forEach(col => allColumns.add(col));
-        }
-      } catch (error) {
-        console.error('Error analyzing file:', file.name, error);
-      }
-    }
-
-    return Array.from(allColumns);
-  };
-
-  // Analyze geodatabase using GDAL microservice - FIXED VERSION
-  const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<string[]> => {
-    // Use proxy endpoint instead of direct URL
+  // Enhanced analyzeGdbColumnsWithGDAL function
+  const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[] }> => {
     const GDAL_SERVICE_URL = '/api/gdal-proxy';
     
     try {
       console.log('🔍 Using GDAL microservice to analyze geodatabase...');
       
-      // Create a zip of the .gdb folder to send to the service
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
       
-      // Add all .gdb files to the zip
       const gdbFiles = files.filter(f => f.name.includes('.gdb/'));
       if (gdbFiles.length === 0) {
         console.log('No .gdb files found');
-        return [];
+        return { layers: [], columns: [] };
       }
       
-      // Find the .gdb folder name
       const gdbFolderName = gdbFiles[0].name.split('/')[0];
       console.log(`📁 Processing geodatabase: ${gdbFolderName}`);
       
@@ -704,22 +669,14 @@ export const UploadForm: React.FC = () => {
         zip.file(file.name, file);
       }
       
-      // Generate zip blob
       const zipBlob = await zip.generateAsync({ type: 'blob' });
-
-      console.log('📦 Files being added to zip:');
-      for (const file of gdbFiles) {
-        console.log(`  - ${file.name}`);
-      }
-      console.log(`📁 Using gdbFolderName: "${gdbFolderName}"`);
       
-      // Step 1: Get list of layers/tables in the geodatabase
+      // Get layer information
       console.log('Step 1: Discovering layers in geodatabase...');
       
       const formData1 = new FormData();
       formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
       formData1.append('command', 'ogrinfo');
-      // Just list the layers, use -json for easier parsing
       formData1.append('args', JSON.stringify(['-json', `/vsizip/${gdbFolderName}.zip/${gdbFolderName}`]));
       
       const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
@@ -732,48 +689,30 @@ export const UploadForm: React.FC = () => {
       }
       
       const result1 = await response1.json();
-
-      console.log('🔍 Raw GDAL response:', JSON.stringify(result1, null, 2));
       
       if (!result1.success || !result1.stdout) {
         console.error('Failed to list layers:', result1.stderr);
-        return [];
+        return { layers: [], columns: [] };
       }
       
-      // Parse the JSON output to get layer names
-      let layers: string[] = [];
-      try {
-        const gdbInfo = JSON.parse(result1.stdout);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        layers = gdbInfo.layers?.map((layer: any) => layer.name) || [];
-        console.log(`Found ${layers.length} layers:`, layers);
-      } catch (e) {
-        console.error('Failed to parse layer list JSON:', e);
-        // Fallback: try to parse non-JSON output
-        layers = parseLayerListFallback(result1.stdout);
-      }
-      
-      if (layers.length === 0) {
-        console.warn('No layers found in geodatabase');
-        return [];
-      }
-      
-      // Step 2: Extract fields from the layer information we already have
-      const allColumns = new Set<string>();
-
+      // Parse layer information
+      const layersWithFields: LayerInfo[] = [];
       try {
         const gdbInfo = JSON.parse(result1.stdout);
         const layers = gdbInfo.layers || [];
         
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        console.log(`Found ${layers.length} layers:`, layers.map((l: any) => l.name));
+        
+        // Extract fields for each layer
         for (const layer of layers) {
-          console.log(`Extracting fields from layer "${layer.name}"...`);
+          const layerFields = new Set<string>();
           
           // Extract regular fields
           const fields = layer.fields || [];
           for (const field of fields) {
             if (field.name) {
-              allColumns.add(field.name);
-              console.log(`  Found field: ${field.name} (${field.type})`);
+              layerFields.add(field.name);
             }
           }
           
@@ -781,227 +720,110 @@ export const UploadForm: React.FC = () => {
           const geometryFields = layer.geometryFields || [];
           for (const geomField of geometryFields) {
             if (geomField.name) {
-              allColumns.add(geomField.name);
-              console.log(`  Found geometry field: ${geomField.name}`);
+              layerFields.add(geomField.name);
             }
           }
-        }
-      } catch (e) {
-        console.error('Failed to extract fields from layer list:', e);
-      }
-      
-      // Add common GIS fields if we found any columns
-      if (allColumns.size > 0) {
-        // These are often implicit in geodatabases
-        const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
-        for (const field of commonFields) {
-          if (!Array.from(allColumns).some(col => col.toUpperCase() === field.toUpperCase())) {
-            // Only add if not already present (case-insensitive check)
-            console.log(`Adding common field: ${field}`);
-            allColumns.add(field);
+          
+          // Add common GIS fields
+          const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
+          for (const field of commonFields) {
+            if (!Array.from(layerFields).some(col => col.toUpperCase() === field.toUpperCase())) {
+              layerFields.add(field);
+            }
           }
+          
+          layersWithFields.push({
+            name: layer.name,
+            fields: Array.from(layerFields),
+            featureCount: layer.featureCount || 'Unknown',
+            geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
+          });
+          
+          console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
         }
+        
+      } catch (e) {
+        console.error('Failed to parse layer list JSON:', e);
+        return { layers: [], columns: [] };
       }
       
-      const columnArray = Array.from(allColumns);
-      console.log(`✅ Extracted ${columnArray.length} unique columns from geodatabase:`, columnArray);
-      return columnArray;
+      // If only one layer, select it automatically
+      if (layersWithFields.length === 1) {
+        console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
+        return { 
+          layers: layersWithFields, 
+          columns: layersWithFields[0].fields 
+        };
+      }
+      
+      // Multiple layers found - need user selection
+      console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
+      return { 
+        layers: layersWithFields, 
+        columns: [] // Empty until user selects layer
+      };
       
     } catch (error) {
       console.error('Error using GDAL microservice:', error);
-      return [];
+      return { layers: [], columns: [] };
     }
   };
 
-  // Fallback parser for non-JSON layer list output
-  const parseLayerListFallback = (output: string): string[] => {
-    const layers: string[] = [];
-    const lines = output.split('\n');
-    
-    // Look for lines that start with a number followed by a colon (layer listing format)
-    // Example: "1: LayerName (Polygon)"
-    const layerPattern = /^\d+:\s+([^\s(]+)/;
-    
-    for (const line of lines) {
-      const match = line.match(layerPattern);
-      if (match && match[1]) {
-        layers.push(match[1]);
-      }
-    }
-    
-    // Alternative pattern: "Layer name: LayerName"
-    if (layers.length === 0) {
-      const altPattern = /^Layer name:\s+(.+)$/i;
-      for (const line of lines) {
-        const match = line.match(altPattern);
-        if (match && match[1]) {
-          layers.push(match[1].trim());
-        }
-      }
-    }
-    
-    return layers;
-  };
+  // Updated analyzeFileColumns function
+  const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[] }> => {
+    const allColumns = new Set<string>();
 
-  // Parse ogrinfo output to extract field names (fallback for non-JSON output)
-  // const parseOgrInfoOutput = (output: string): string[] => {
-  //   const columns = new Set<string>();
+    // Check if we have a geodatabase
+    const hasGDB = files.some(f => f.name.includes('.gdb/'));
     
-  //   // ogrinfo output format for fields:
-  //   // OBJECTID: Integer64 (0.0)
-  //   // Shape: Geometry
-  //   // field_name: String (255.0)
-    
-  //   const lines = output.split('\n');
-  //   let inLayerSection = false;
-    
-  //   for (const line of lines) {
-  //     // Check if we're in a layer section
-  //     if (line.startsWith('Layer name:') || line.includes('Feature Count:')) {
-  //       inLayerSection = true;
-  //       continue;
-  //     }
-      
-  //     // Look for field definitions (they have a colon followed by a type)
-  //     if (inLayerSection && line.includes(':')) {
-  //       // Match pattern: "field_name: Type" or "field_name (FieldAlias): Type"
-  //       const match = line.match(/^([^:(]+)(?:\s*\([^)]*\))?\s*:\s*(String|Integer|Integer64|Real|Date|DateTime|Binary|Geometry|Text|Double|Float)/i);
-  //       if (match) {
-  //         const fieldName = match[1].trim();
-  //         // Skip metadata fields
-  //         if (!fieldName.startsWith('Layer') && 
-  //             !fieldName.startsWith('Geometry') && 
-  //             !fieldName.startsWith('Feature Count') &&
-  //             !fieldName.startsWith('Extent') &&
-  //             !fieldName.startsWith('SRS') &&
-  //             !fieldName.startsWith('FID Column') &&
-  //             !fieldName.startsWith('Geometry Column') &&
-  //             fieldName.length > 0) {
-  //           columns.add(fieldName);
-  //         }
-  //       }
-  //     }
-  //   }
-    
-  //   return Array.from(columns);
-  // };
-
-  // Analyze geodatabase files to extract column names (fallback method)
-  const analyzeGdbColumns = async (allFiles: File[]): Promise<string[]> => {
-    try {
-      const gdbFiles = allFiles.filter(f => f.name.includes('.gdb/'));
-      
-      console.log(`Found ${gdbFiles.length} files in geodatabase`);
-      
-      // Look for metadata.xml files which might contain field information
-      const xmlFiles = gdbFiles.filter(f => 
-        f.name.endsWith('.xml') || 
-        f.name.includes('metadata') ||
-        f.name.includes('gdbindexes')
-      );
-      
-      const columns = new Set<string>();
-      
-      // Try to read XML metadata files
-      for (const xmlFile of xmlFiles) {
-        try {
-          const xmlContent = await readFileAsText(xmlFile);
-          const xmlColumns = extractColumnsFromXml(xmlContent);
-          xmlColumns.forEach(col => columns.add(col));
-        } catch (error) {
-          console.log(`Could not read XML metadata ${xmlFile.name}:`, error);
-        }
-      }
-      
-      // Look for .spx files which might contain field names
-      const spxFiles = gdbFiles.filter(f => f.name.endsWith('.spx'));
-      for (const spxFile of spxFiles) {
-        const fileName = spxFile.name.split('/').pop()?.replace('.spx', '') || '';
-        if (fileName && !fileName.startsWith('a0000')) {
-          // File name might be a table name, but we can't get fields from it
-          console.log(`Found potential table: ${fileName}`);
-        }
-      }
-      
-      // If we found some columns, return them
-      if (columns.size > 0) {
-        console.log('Extracted columns from GDB metadata:', Array.from(columns));
-        return Array.from(columns);
-      }
-      
-      // If no columns found, prompt user that manual input is needed
-      console.warn('⚠️ Could not automatically extract column names from .gdb files.');
-      console.warn('File geodatabases are proprietary format. Please use one of these methods:');
-      console.warn('1. Enter column names manually in the next dialog');
-      console.warn('2. Export to CSV/Shapefile from ArcGIS Pro first');
-      console.warn('3. Include a metadata.json file with column definitions');
-      
-      // Return empty array - will trigger manual input or schema validation
-      return [];
-      
-    } catch (error) {
-      console.error('Error analyzing geodatabase columns:', error);
-      return [];
-    }
-  };
-
-  // Helper function to read file as ArrayBuffer
-  const readFileAsArrayBuffer = async (file: File, maxBytes?: number): Promise<ArrayBuffer> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target?.result as ArrayBuffer);
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      
-      if (maxBytes) {
-        reader.readAsArrayBuffer(file.slice(0, maxBytes));
-      } else {
-        reader.readAsArrayBuffer(file);
-      }
-    });
-  };
-
-  // Helper function to read file as text
-  const readFileAsText = async (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target?.result as string);
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      reader.readAsText(file);
-    });
-  };
-
-  // Extract column information from XML metadata
-  const extractColumnsFromXml = (xmlContent: string): string[] => {
-    const columns: string[] = [];
-    
-    try {
-      // Look for field definitions in XML
-      const fieldMatches = xmlContent.match(/<Field[^>]*>[\s\S]*?<\/Field>/gi);
-      if (fieldMatches) {
-        for (const fieldMatch of fieldMatches) {
-          const nameMatch = fieldMatch.match(/<Name[^>]*>(.*?)<\/Name>/i);
-          if (nameMatch) {
-            columns.push(nameMatch[1]);
+    if (hasGDB) {
+      // Try to extract columns using GDAL microservice
+      try {
+        const { layers, columns } = await analyzeGdbColumnsWithGDAL(files);
+        
+        if (layers.length > 1) {
+          // Multiple layers - need user selection
+          setSourceLayerInfo(layers);
+          return { 
+            needsLayerSelection: true, 
+            columns: [], 
+            layers 
+          };
+        } else if (layers.length === 1) {
+          // Single layer - use its columns
+          columns.forEach(col => allColumns.add(col));
+          if (columns.length > 0) {
+            return { 
+              needsLayerSelection: false, 
+              columns: Array.from(allColumns) 
+            };
           }
         }
+      } catch (error) {
+        console.error('Failed to analyze GDB with GDAL service:', error);
       }
-      
-      // Alternative XML patterns
-      const altMatches = xmlContent.match(/name\s*=\s*["']([^"']+)["']/gi);
-      if (altMatches) {
-        for (const match of altMatches) {
-          const nameMatch = match.match(/name\s*=\s*["']([^"']+)["']/i);
-          if (nameMatch) {
-            columns.push(nameMatch[1]);
-          }
-        }
-      }
-      
-    } catch (error) {
-      console.log('Error parsing XML metadata:', error);
     }
-    
-    return columns;
+
+    // Process other file types (existing code)
+    for (const file of files) {
+      try {
+        if (file.name.toLowerCase().endsWith('.csv')) {
+          const columns = await analyzeCsvColumns(file);
+          columns.forEach(col => allColumns.add(col));
+        } else if (file.name.toLowerCase().endsWith('.dbf')) {
+          console.log('DBF file detected:', file.name);
+          const columns = await analyzeDbfColumns(file);
+          columns.forEach(col => allColumns.add(col));
+        }
+      } catch (error) {
+        console.error('Error analyzing file:', file.name, error);
+      }
+    }
+
+    return { 
+      needsLayerSelection: false, 
+      columns: Array.from(allColumns) 
+    };
   };
 
   // Analyze DBF files (shapefile attribute tables)
@@ -1034,6 +856,21 @@ export const UploadForm: React.FC = () => {
       console.error('Error analyzing DBF columns:', error);
       return [];
     }
+  };
+
+  // Helper function to read file as ArrayBuffer
+  const readFileAsArrayBuffer = async (file: File, maxBytes?: number): Promise<ArrayBuffer> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as ArrayBuffer);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      
+      if (maxBytes) {
+        reader.readAsArrayBuffer(file.slice(0, maxBytes));
+      } else {
+        reader.readAsArrayBuffer(file);
+      }
+    });
   };
 
   // Handle manual column input submission
@@ -1208,8 +1045,7 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  // Start schema validation process
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // Updated startSchemaValidation function
   const startSchemaValidation = async () => {
     if (formData.selectedFiles.length === 0) {
       setUploadMessage('Please select files before validating schema.');
@@ -1231,38 +1067,58 @@ export const UploadForm: React.FC = () => {
         return;
       }
       
-      // 3. Analyze uploaded files for column names
-      const columns = await analyzeFileColumns(formData.selectedFiles);
+      // 3. Analyze uploaded files for column names and layer information
+      const analysisResult = await analyzeFileColumns(formData.selectedFiles);
       
-      // Check if we have a geodatabase
-      const hasGDB = formData.selectedFiles.some(f => f.name.includes('.gdb/'));
-      
-      if (columns.length === 0 && hasGDB) {
-        // Show manual input modal for GDB files if GDAL service couldn't extract columns
-        setShowManualColumnInput(true);
-        setUploadMessage('Could not automatically extract columns from geodatabase. Please enter them manually.');
-        return;
-      } else if (columns.length === 0) {
-        setUploadMessage('Could not detect column names from uploaded files. Please upload CSV files or enter columns manually.');
-        setShowManualColumnInput(true);
+      if (analysisResult.needsLayerSelection) {
+        // Show layer selection modal
+        setShowLayerSelection(true);
+        setUploadMessage('Multiple layers found. Please select a source layer.');
         return;
       }
       
-      // If we successfully got columns from GDAL service
-      if (hasGDB && columns.length > 0) {
-        setUploadMessage(`✅ Successfully extracted ${columns.length} columns from geodatabase using GDAL`);
+      if (analysisResult.columns.length === 0) {
+        // Check if we have a geodatabase that couldn't be processed
+        const hasGDB = formData.selectedFiles.some(f => f.name.includes('.gdb/'));
+        
+        if (hasGDB) {
+          setShowManualColumnInput(true);
+          setUploadMessage('Could not automatically extract columns from geodatabase. Please enter them manually.');
+          return;
+        } else {
+          setUploadMessage('Could not detect column names from uploaded files. Please upload CSV files or enter columns manually.');
+          setShowManualColumnInput(true);
+          return;
+        }
       }
       
-      setSourceColumns(columns);
-      
-      // 4. Show schema mapping interface
+      // Set source columns and continue with schema mapping
+      setSourceColumns(analysisResult.columns);
       setShowSchemaMapping(true);
+      
+      if (analysisResult.columns.length > 0) {
+        setUploadMessage(`✅ Successfully extracted ${analysisResult.columns.length} columns from files`);
+      }
       
     } catch (error) {
       console.error('Schema validation error:', error);
       setUploadMessage('Error during schema validation. Please try again.');
     } finally {
       setIsProcessingFolders(false);
+    }
+  };
+
+  // Handler for layer selection
+  const handleLayerSelection = (layerName: string) => {
+    setSelectedSourceLayer(layerName);
+    
+    // Find the selected layer and get its columns
+    const selectedLayer = sourceLayerInfo.find(layer => layer.name === layerName);
+    if (selectedLayer) {
+      setSourceColumns(selectedLayer.fields);
+      setShowLayerSelection(false);
+      setShowSchemaMapping(true);
+      setUploadMessage(`✅ Selected layer "${layerName}" with ${selectedLayer.fields.length} columns`);
     }
   };
 
@@ -1343,6 +1199,8 @@ export const UploadForm: React.FC = () => {
       setGeneratedFilename('');
       setColumnMapping({});
       setSelectedTable('');
+      setSelectedSourceLayer('');
+      setSourceLayerInfo([]);
       
       // Clear the file input element
       const fileInput = document.getElementById('file-input') as HTMLInputElement;
@@ -1427,6 +1285,109 @@ export const UploadForm: React.FC = () => {
   // Main form (authenticated users only)
   return (
     <div className="max-w-4xl mx-auto p-8 bg-white rounded-lg shadow-lg">
+      {/* Layer Selection Modal */}
+      {showLayerSelection && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Select Source Layer</h2>
+            
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+              <p className="text-blue-800 font-semibold mb-2">
+                📁 Multiple Layers Found in Geodatabase
+              </p>
+              <p className="text-blue-700 text-sm">
+                Your file geodatabase contains {sourceLayerInfo.length} layers. Please select which layer you want to import and map to the target schema.
+              </p>
+            </div>
+            
+              <div className="grid gap-4">
+                {sourceLayerInfo.map((layer) => (
+                  <div
+                    key={layer.name}
+                    className={`border rounded-lg p-4 cursor-pointer transition-all duration-200 hover:shadow-md ${
+                      selectedSourceLayer === layer.name
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-300 hover:border-blue-300'
+                    }`}
+                    onClick={() => setSelectedSourceLayer(layer.name)}
+                  >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <input
+                          type="radio"
+                          name="sourceLayer"
+                          value={layer.name}
+                          checked={selectedSourceLayer === layer.name}
+                          onChange={() => setSelectedSourceLayer(layer.name)}
+                          className="text-blue-600"
+                        />
+                        <h3 className="text-lg font-semibold text-gray-800">
+                          {layer.name}
+                        </h3>
+                        <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded">
+                          {layer.geometryType}
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
+                        <div>
+                          <span className="font-medium">Features:</span> {layer.featureCount}
+                        </div>
+                        <div>
+                          <span className="font-medium">Fields:</span> {layer.fields.length}
+                        </div>
+                      </div>
+                      
+                      {/* Show first few field names as preview */}
+                      <div className="mt-2">
+                        <span className="text-sm font-medium text-gray-700">Field Preview: </span>
+                        <span className="text-sm text-gray-600">
+                          {layer.fields.slice(0, 5).join(', ')}
+                          {layer.fields.length > 5 && ` ... (+${layer.fields.length - 5} more)`}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            {/* Selection Summary */}
+            {selectedSourceLayer && (
+              <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-md">
+                <p className="text-green-800 font-medium">
+                  ✅ Selected: {selectedSourceLayer}
+                </p>
+                <p className="text-green-700 text-sm mt-1">
+                  This layer has {sourceLayerInfo.find(l => l.name === selectedSourceLayer)?.fields.length} fields that will be available for column mapping.
+                </p>
+              </div>
+            )}
+            
+            {/* Modal Actions */}
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowLayerSelection(false);
+                  setSelectedSourceLayer('');
+                }}
+                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleLayerSelection(selectedSourceLayer)}
+                disabled={!selectedSourceLayer}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Continue with Selected Layer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Manual Column Input Modal */}
       {showManualColumnInput && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1508,6 +1469,18 @@ export const UploadForm: React.FC = () => {
           <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">Schema Validation & Column Mapping</h2>
             
+            {/* Show selected layer info if applicable */}
+            {selectedSourceLayer && (
+              <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                <p className="text-blue-800 font-semibold mb-1">
+                  📊 Source Layer: {selectedSourceLayer}
+                </p>
+                <p className="text-blue-700 text-sm">
+                  Mapping {sourceColumns.length} columns from the selected geodatabase layer to target table schema.
+                </p>
+              </div>
+            )}
+
             {/* Table Selection */}
             <div className="mb-6">
               <label className="block text-gray-700 font-semibold mb-2">
@@ -1535,6 +1508,9 @@ export const UploadForm: React.FC = () => {
                   <div>
                     <h3 className="text-lg font-semibold text-gray-800 mb-3">
                       Your File Columns ({sourceColumns.length})
+                      {selectedSourceLayer && (
+                        <span className="text-sm text-gray-600 ml-2">from {selectedSourceLayer}</span>
+                      )}
                     </h3>
                     <div className="border border-gray-300 rounded-md p-4 bg-gray-50 max-h-64 overflow-y-auto">
                       {sourceColumns.map(column => (
@@ -2104,8 +2080,8 @@ export const UploadForm: React.FC = () => {
         {/* Enhanced Info Box */}
         <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
           <p className="text-xs text-blue-700">
-            <strong>File Geodatabase Support:</strong> You can now drag and drop .gdb folders directly! 
-            The application will automatically include all files within the geodatabase while preserving the directory structure.
+            <strong>Enhanced Geodatabase Support:</strong> The application now supports layer selection for geodatabases with multiple layers! 
+            Each layer can be imported separately with proper column mapping.
           </p>
           {/* Development: Test table discovery */}
           {process.env.NODE_ENV === 'development' && (
