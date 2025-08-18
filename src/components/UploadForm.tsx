@@ -706,6 +706,12 @@ export const UploadForm: React.FC = () => {
       
       // Generate zip blob
       const zipBlob = await zip.generateAsync({ type: 'blob' });
+
+      console.log('📦 Files being added to zip:');
+      for (const file of gdbFiles) {
+        console.log(`  - ${file.name}`);
+      }
+      console.log(`📁 Using gdbFolderName: "${gdbFolderName}"`);
       
       // Step 1: Get list of layers/tables in the geodatabase
       console.log('Step 1: Discovering layers in geodatabase...');
@@ -714,7 +720,7 @@ export const UploadForm: React.FC = () => {
       formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
       formData1.append('command', 'ogrinfo');
       // Just list the layers, use -json for easier parsing
-      formData1.append('args', JSON.stringify(['-json', gdbFolderName]));
+      formData1.append('args', JSON.stringify(['--formats']));
       
       const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
         method: 'POST',
