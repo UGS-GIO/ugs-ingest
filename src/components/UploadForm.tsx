@@ -720,7 +720,7 @@ export const UploadForm: React.FC = () => {
       formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
       formData1.append('command', 'ogrinfo');
       // Just list the layers, use -json for easier parsing
-      formData1.append('args', JSON.stringify(['-json', '/tmp/upload/']));
+      formData1.append('args', JSON.stringify(['-json', `/vsizip/${gdbFolderName}.zip/${gdbFolderName}`]));
       
       const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
         method: 'POST',
