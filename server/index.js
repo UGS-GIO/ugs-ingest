@@ -43,7 +43,6 @@ app.get('/api/user', (req, res) => {
 });
 
 // Proxy endpoint for GDAL microservice with authentication
-// Proxy endpoint for GDAL microservice with authentication
 app.post('/api/gdal-proxy/*', async (req, res) => {
   try {
     const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
@@ -52,17 +51,16 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     console.log(`Proxying GDAL request to: ${gdalUrl}`);
     
     // Get an ID token for service-to-service authentication
-    let idToken = '';
+    let authorizationHeader = '';
     try {
       const client = await auth.getIdTokenClient(gdalUrl);
       const headers = await client.getRequestHeaders();
-      idToken = headers['Authorization'] || '';
+      authorizationHeader = headers['Authorization'] || '';
       console.log('Successfully obtained ID token for GDAL service');
-      console.log('ID Token (first 50 chars):', idToken.substring(0, 50));
-      console.log('Auth headers:', headers);
+      console.log('ID Token (first 50 chars):', authorizationHeader.substring(0, 50));
     } catch (authError) {
       console.error('Failed to get ID token:', authError);
-      return res.status(500).json({ error: 'Authentication failed', details: authError.message });
+      return res.status(500).json({ error: 'Authentication failed' });
     }
     
     // Get the raw body from the request
@@ -72,23 +70,21 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     }
     const body = Buffer.concat(chunks);
     
+    console.log('Request body size:', body.length);
+    
     // Prepare headers for the GDAL service
-    const requestHeaders = {
+    const headers = {
       'Content-Type': req.headers['content-type'] || 'multipart/form-data',
       'Content-Length': body.length.toString(),
+      'Authorization': authorizationHeader, // This was missing!
     };
     
-    // Add authorization header if we have a token
-    if (idToken) {
-      requestHeaders['Authorization'] = idToken;
-    }
-    
-    console.log('Request headers being sent to GDAL:', requestHeaders);
+    console.log('Request headers being sent to GDAL:', headers);
     
     // Forward the request to GDAL microservice
     const gdalResponse = await fetch(gdalUrl, {
       method: 'POST',
-      headers: requestHeaders,
+      headers: headers,
       body: body
     });
     
