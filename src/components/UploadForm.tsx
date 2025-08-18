@@ -720,7 +720,7 @@ export const UploadForm: React.FC = () => {
       formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
       formData1.append('command', 'ogrinfo');
       // Just list the layers, use -json for easier parsing
-      formData1.append('args', JSON.stringify(['--formats']));
+      formData1.append('args', JSON.stringify(['-json', '/tmp/upload/']));
       
       const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
         method: 'POST',
@@ -732,6 +732,8 @@ export const UploadForm: React.FC = () => {
       }
       
       const result1 = await response1.json();
+
+      console.log('🔍 Raw GDAL response:', JSON.stringify(result1, null, 2));
       
       if (!result1.success || !result1.stdout) {
         console.error('Failed to list layers:', result1.stderr);
