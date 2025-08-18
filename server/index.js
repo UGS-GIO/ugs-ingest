@@ -63,11 +63,18 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
       // If we can't get a token, try anyway (might work if service allows unauthenticated)
     }
     
-    // For multipart form data, we need to pass through the raw body
-    // Let the request stream through directly
+    
+    // Collect the request body while preserving multipart data
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks);
+    
+    // Prepare headers for the GDAL service - preserve original headers
     const headers = {
-      'Content-Type': req.headers['content-type'],
-      'Content-Length': req.headers['content-length'],
+      'Content-Type': req.headers['content-type'], // Keep exact content-type with boundary
+      'Content-Length': body.length.toString(),
     };
     
     // Add authorization header if we have a token
@@ -79,12 +86,13 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     console.log('Has Authorization header:', 'Authorization' in headers);
     console.log('Authorization header starts with:', headers['Authorization'] ? headers['Authorization'].substring(0, 20) : 'none');
     console.log('Content-Type:', headers['Content-Type']);
+    console.log('Body size:', body.length, 'bytes');
     
-    // Forward the request to GDAL microservice using the request stream
+    // Forward the request to GDAL microservice
     const gdalResponse = await fetch(gdalUrl, {
       method: 'POST',
       headers: headers,
-      body: req // Pass the request object directly to preserve multipart boundaries
+      body: body // Use the collected buffer
     });
     
     console.log('GDAL response status:', gdalResponse.status);
