@@ -1,46 +1,34 @@
+// components/UploadForm.tsx - Refactored Main Component
 import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
 
-// Type definitions for File System Access API
-interface FileSystemHandle {
-  kind: 'file' | 'directory';
-  name: string;
-}
+// Import types and utilities
+import type {
+  FormData as UploadFormData,
+  FormErrors,
+  SchemaValidationState,
+  TableInfo,
+  ColumnInfo,
+  LayerInfo,
+  GDALAnalysisResult,
+  FileSystemDirectoryHandle,
+  FileSystemFileHandle,
+  FileSystemDirectoryEntry,
+  //FileSystemFileEntry,
+} from '../types/uploadTypes';
 
-interface FileSystemFileHandle extends FileSystemHandle {
-  kind: 'file';
-  getFile(): Promise<File>;
-}
+import { getSchemaFromDomain } from '../types/uploadTypes';
 
-interface FileSystemDirectoryHandle extends FileSystemHandle {
-  kind: 'directory';
-  entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
-}
-
-// Types for schema validation
-interface TableInfo {
-  schema: string;
-  name: string;
-  fullName: string;
-  displayName: string;
-}
-
-interface ColumnInfo {
-  name: string;
-  dataType: string;
-  isNullable: boolean;
-  defaultValue: string | null;
-  position: number;
-}
-
-// Layer information interface
-interface LayerInfo {
-  name: string;
-  fields: string[];
-  featureCount: string | number;
-  geometryType: string;
-}
+// Import components
+import { ProjectInfoForm } from './ProjectInfoForm';
+import { NamingConventionForm } from './NamingConventionForm';
+import { FileUploadSection } from './FileUploadSection';
+import { SchemaValidationStatus } from './SchemaValidationStatus';
+import { LayerSelectionModal } from './LayerSelectionModal';
+import { ManualColumnModal } from './ManualColumnModal';
+import { SchemaMappingModal } from './SchemaMappingModal';
+import { ActionButtons } from './ActionButtons';
 
 declare global {
   interface Window {
@@ -48,95 +36,17 @@ declare global {
   }
 }
 
-interface FormData {
-  // Original fields
-  projectName: string;
-  datasetName: string;
-  authorName: string;
-  publicationType: string;
-  description: string;
-  selectedFiles: File[];
-  
-  // New fields for zip naming convention
-  domain: string;
-  customDomain: string;
-  dataTopic: string;
-  scale: string;
-  quadName: string;
-  pubId: string;
-  loadType: string;
-}
-
-// Define the shape of our errors
-interface FormErrors {
-  projectName?: string;
-  datasetName?: string;
-  authorName?: string;
-  publicationType?: string;
-  description?: string;
-  selectedFiles?: string;
-  domain?: string;
-  customDomain?: string;
-  dataTopic?: string;
-  scale?: string;
-  quadName?: string;
-  pubId?: string;
-  loadType?: string;
-}
-
-// Options for Publication Type dropdown
-const publicationTypeOptions = [
-  { value: '', label: 'Select Publication Type' },
-  { value: 'Special Study', label: 'Special Study' },
-  { value: 'Digital Map', label: 'Digital Map' },
-  { value: 'Open File', label: 'Open File Report' },
-  { value: 'report', label: 'Technical Report' },
-  { value: 'dataset', label: 'Dataset' },
-  { value: 'other', label: 'Other' },
-];
-
-// Domain options (now includes schema option)
-const domainOptions = [
-  { value: '', label: 'Select Domain' },
-  { value: 'hazards', label: 'Hazards', schema: 'hazards' },
-  { value: 'groundwater', label: 'Groundwater', schema: 'groundwater' },
-  { value: 'wetlands', label: 'Wetlands', schema: 'wetlands' },
-  { value: 'geologic_maps', label: 'Geologic Maps', schema: 'mapping' },
-  { value: 'energy_minerals', label: 'Energy & Minerals', schema: 'emp' },
-  { value: 'ccus', label: 'CCUS', schema: 'ccus' },
-  { value: 'boreholes', label: 'Boreholes', schema: 'boreholes' },
-  { value: 'geochron', label: 'Geochronology', schema: 'geochron' },
-  { value: 'custom', label: 'Other (specify)' },
-];
-
-// Helper function to get schema from domain
-const getSchemaFromDomain = (domain: string): string => {
-  const domainOption = domainOptions.find(option => option.value === domain);
-  return domainOption?.schema || 'mapping'; // Default to mapping schema
-};
-
-// Load type options
-const loadTypeOptions = [
-  { value: '', label: 'Select Load Type' },
-  { value: 'full', label: 'Full' },
-  { value: 'update', label: 'Update' },
-  { value: 'append', label: 'Append' },
-  { value: 'incremental', label: 'Incremental' },
-];
-
 export const UploadForm: React.FC = () => {
   const { email, authenticated, loading, error } = useIAPUser();
 
   // State to hold all form data
-  const [formData, setFormData] = useState<FormData>({
-    // Original fields
+  const [formData, setFormData] = useState<UploadFormData>({
     projectName: '',
     datasetName: '',
     authorName: email || '',
     publicationType: '',
     description: '',
     selectedFiles: [],
-    // New fields
     domain: '',
     customDomain: '',
     dataTopic: '',
@@ -146,27 +56,26 @@ export const UploadForm: React.FC = () => {
     loadType: '',
   });
 
-  // State for schema validation
+  // State for schema validation workflow
+  const [schemaValidationState, setSchemaValidationState] = useState<SchemaValidationState>('not_started');
   const [selectedTable, setSelectedTable] = useState<string>('');
-  const [showSchemaMapping, setShowSchemaMapping] = useState<boolean>(false);
   const [sourceColumns, setSourceColumns] = useState<string[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [targetColumns, setTargetColumns] = useState<ColumnInfo[]>([]);
   const [columnMapping, setColumnMapping] = useState<{[key: string]: string}>({});
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [availableTables, setAvailableTables] = useState<TableInfo[]>([]);
   const [showManualColumnInput, setShowManualColumnInput] = useState<boolean>(false);
   const [manualColumnInput, setManualColumnInput] = useState<string>('');
 
-  // New state for layer selection
+  // State for layer selection
   const [sourceLayerInfo, setSourceLayerInfo] = useState<LayerInfo[]>([]);
   const [selectedSourceLayer, setSelectedSourceLayer] = useState<string>('');
-  const [showLayerSelection, setShowLayerSelection] = useState<boolean>(false);
+  const [gdalAnalysisResult, setGdalAnalysisResult] = useState<GDALAnalysisResult | null>(null);
 
-  // State for validation errors
+  // State for validation errors and UI
   const [errors, setErrors] = useState<FormErrors>({});
   const [uploadMessage, setUploadMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isValidatingSchema, setIsValidatingSchema] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [generatedFilename, setGeneratedFilename] = useState<string>('');
   const [isProcessingFolders, setIsProcessingFolders] = useState<boolean>(false);
@@ -195,17 +104,14 @@ export const UploadForm: React.FC = () => {
         selectedFiles
       } = formData;
 
-      // Use custom domain if "custom" is selected, otherwise use selected domain
       const effectiveDomain = domain === 'custom' ? customDomain : domain;
 
-      // Only generate if we have the required fields
       if (effectiveDomain && dataTopic && loadType && selectedFiles.length > 0) {
         const today = new Date();
         const dateStr = today.getFullYear().toString() +
                        (today.getMonth() + 1).toString().padStart(2, '0') +
                        today.getDate().toString().padStart(2, '0');
 
-        // Build filename parts, filtering out empty values
         const parts = [
           effectiveDomain,
           dataTopic,
@@ -238,7 +144,7 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Enhanced function to handle both files and folders
+  // File handling functions
   const processDataTransferItems = async (items: DataTransferItemList): Promise<File[]> => {
     const files: File[] = [];
     const promises: Promise<void>[] = [];
@@ -251,19 +157,26 @@ export const UploadForm: React.FC = () => {
         
         if (entry) {
           if (entry.isFile) {
-            // Handle regular files
+            // Handle regular files - use runtime safety approach
             promises.push(
               new Promise<void>((resolve) => {
-                (entry as FileSystemFileEntry).file((file) => {
-                  files.push(file);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const fileEntry = entry as any;
+                if (fileEntry.file && typeof fileEntry.file === 'function') {
+                  fileEntry.file((file: File) => {
+                    files.push(file);
+                    resolve();
+                  });
+                } else {
                   resolve();
-                });
+                }
               })
             );
           } else if (entry.isDirectory) {
             // Handle directories (like .gdb folders)
             promises.push(
-              readDirectoryEntry(entry as FileSystemDirectoryEntry, entry.name)
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              readDirectoryEntry(entry as any, entry.name)
                 .then((dirFiles) => {
                   files.push(...dirFiles);
                 })
@@ -273,7 +186,6 @@ export const UploadForm: React.FC = () => {
             );
           }
         } else {
-          // Fallback for browsers that don't support webkitGetAsEntry
           const file = item.getAsFile();
           if (file) {
             files.push(file);
@@ -286,34 +198,43 @@ export const UploadForm: React.FC = () => {
     return files;
   };
 
-  // Helper function to read directory entries (for older API)
   const readDirectoryEntry = async (dirEntry: FileSystemDirectoryEntry, basePath = ''): Promise<File[]> => {
     return new Promise((resolve, reject) => {
       const files: File[] = [];
       const reader = dirEntry.createReader();
       
       const readEntries = () => {
-        reader.readEntries(async (entries) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        reader.readEntries(async (entries: any[]) => {
           if (entries.length === 0) {
             resolve(files);
             return;
           }
           
-          const promises = entries.map((entry) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const promises = entries.map((entry: any) => {
             return new Promise<void>((entryResolve) => {
               const fullPath = basePath ? `${basePath}/${entry.name}` : entry.name;
               
               if (entry.isFile) {
-                (entry as FileSystemFileEntry).file((file) => {
-                  const fileWithPath = new File([file], fullPath, {
-                    type: file.type,
-                    lastModified: file.lastModified
+                // Use any type and runtime check for safety
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const fileEntry = entry as any;
+                if (fileEntry.file && typeof fileEntry.file === 'function') {
+                  fileEntry.file((file: File) => {
+                    const fileWithPath = new File([file], fullPath, {
+                      type: file.type,
+                      lastModified: file.lastModified
+                    });
+                    files.push(fileWithPath);
+                    entryResolve();
                   });
-                  files.push(fileWithPath);
+                } else {
                   entryResolve();
-                });
+                }
               } else if (entry.isDirectory) {
-                readDirectoryEntry(entry as FileSystemDirectoryEntry, fullPath)
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                readDirectoryEntry(entry as any, fullPath)
                   .then((subFiles) => {
                     files.push(...subFiles);
                     entryResolve();
@@ -326,7 +247,7 @@ export const UploadForm: React.FC = () => {
           });
           
           await Promise.all(promises);
-          readEntries(); // Continue reading if there are more entries
+          readEntries();
         }, reject);
       };
       
@@ -334,39 +255,60 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  // Add files to selection
+  const readDirectoryHandle = async (dirHandle: FileSystemDirectoryHandle, path = ''): Promise<File[]> => {
+    const files: File[] = [];
+    
+    for await (const [name, handle] of dirHandle.entries()) {
+      const fullPath = path ? `${path}/${name}` : name;
+      
+      if (handle.kind === 'file') {
+        const file = await (handle as FileSystemFileHandle).getFile();
+        const fileWithPath = new File([file], fullPath, {
+          type: file.type,
+          lastModified: file.lastModified
+        });
+        files.push(fileWithPath);
+      } else if (handle.kind === 'directory') {
+        const subFiles = await readDirectoryHandle(handle as FileSystemDirectoryHandle, fullPath);
+        files.push(...subFiles);
+      }
+    }
+    
+    return files;
+  };
+
   const addFiles = (newFiles: File[]) => {
     setFormData((prevData) => ({
       ...prevData,
       selectedFiles: [...prevData.selectedFiles, ...newFiles],
     }));
-    // Clear file error
     if (errors.selectedFiles) {
       setErrors((prevErrors) => ({ ...prevErrors, selectedFiles: undefined }));
     }
+    setSchemaValidationState('not_started');
+    setGdalAnalysisResult(null);
+    setColumnMapping({});
   };
 
-  // Remove a specific file from the selection
   const removeFile = (indexToRemove: number) => {
     setFormData((prevData) => ({
       ...prevData,
       selectedFiles: prevData.selectedFiles.filter((_, index) => index !== indexToRemove),
     }));
+    setSchemaValidationState('not_started');
+    setGdalAnalysisResult(null);
+    setColumnMapping({});
   };
 
-  // Handler for direct file input change
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const newFiles = Array.from(e.target.files);
       addFiles(newFiles);
-      // Reset the input so the same files can be selected again if needed
       e.target.value = '';
     }
   };
 
-  // Unified handler for both files and folders
   const handleFileOrFolderSelect = async () => {
-    // First, try the folder picker if available
     if ('showDirectoryPicker' in window) {
       try {
         const choice = await new Promise<'files' | 'folder' | 'cancel'>((resolve) => {
@@ -417,7 +359,6 @@ export const UploadForm: React.FC = () => {
             resolve('cancel');
           });
           
-          // Close on background click
           modal.addEventListener('click', (e) => {
             if (e.target === modal) {
               document.body.removeChild(modal);
@@ -441,37 +382,12 @@ export const UploadForm: React.FC = () => {
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
           console.error('Error selecting folder:', error);
-          // Fallback to file picker
           document.getElementById('file-input')?.click();
         }
       }
     } else {
-      // If folder picker not supported, just use file picker
       document.getElementById('file-input')?.click();
     }
-  };
-
-  // Helper function to read directory using File System Access API
-  const readDirectoryHandle = async (dirHandle: FileSystemDirectoryHandle, path = ''): Promise<File[]> => {
-    const files: File[] = [];
-    
-    for await (const [name, handle] of dirHandle.entries()) {
-      const fullPath = path ? `${path}/${name}` : name;
-      
-      if (handle.kind === 'file') {
-        const file = await (handle as FileSystemFileHandle).getFile();
-        const fileWithPath = new File([file], fullPath, {
-          type: file.type,
-          lastModified: file.lastModified
-        });
-        files.push(fileWithPath);
-      } else if (handle.kind === 'directory') {
-        const subFiles = await readDirectoryHandle(handle as FileSystemDirectoryHandle, fullPath);
-        files.push(...subFiles);
-      }
-    }
-    
-    return files;
   };
 
   // Drag and Drop Handlers
@@ -492,13 +408,11 @@ export const UploadForm: React.FC = () => {
     
     try {
       if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-        // Use the enhanced function to handle both files and folders
         const newFiles = await processDataTransferItems(e.dataTransfer.items);
         if (newFiles.length > 0) {
           addFiles(newFiles);
         }
       } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        // Fallback for older browsers
         const newFiles = Array.from(e.dataTransfer.files);
         addFiles(newFiles);
       }
@@ -511,95 +425,18 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Generate metadata object
-  const generateMetadata = () => {
-    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
-    
-    return {
-      // Original metadata
-      projectName: formData.projectName,
-      datasetName: formData.datasetName,
-      authorName: formData.authorName,
-      publicationType: formData.publicationType,
-      description: formData.description,
-      
-      // Zip naming convention fields
-      domain: effectiveDomain,
-      dataTopic: formData.dataTopic,
-      scale: formData.scale || null,
-      quadName: formData.quadName || null,
-      pubId: formData.pubId || null,
-      loadType: formData.loadType,
-      
-      // System metadata
-      submittedBy: email,
-      submittedAt: new Date().toISOString(),
-      originalFiles: formData.selectedFiles.map(file => ({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified
-      })),
-      totalFileCount: formData.selectedFiles.length,
-      totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
-      zipFilename: generatedFilename,
-      
-      // Schema validation and mapping (if applicable)
-      schemaValidation: formData.loadType !== 'full' ? {
-        targetTable: selectedTable,
-        sourceLayer: selectedSourceLayer, // Include selected layer
-        sourceColumns: sourceColumns,
-        columnMapping: columnMapping,
-        validationCompleted: showSchemaMapping ? false : Object.keys(columnMapping).length > 0
-      } : null,
-      containsGeodatabase: formData.selectedFiles.some(file => 
-        file.name.includes('.gdb/') || file.name.endsWith('.gdb')
-      ),
-      
-      // Audit trail
-      userAgent: navigator.userAgent,
-      uploadSource: 'UGS Ingest Web Application',
-    };
-  };
-
-  // Basic form validation
-  const validateForm = (): boolean => {
-    const newErrors: FormErrors = {};
-    
-    // Original field validation
-    if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
-    if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
-    if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
-    if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
-    if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
-    
-    // New field validation
-    if (!formData.domain) newErrors.domain = 'Domain is required.';
-    if (formData.domain === 'custom' && !formData.customDomain.trim()) {
-      newErrors.customDomain = 'Custom domain name is required.';
-    }
-    if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
-    if (!formData.loadType) newErrors.loadType = 'Load type is required.';
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  // PostgREST configuration
+  // PostgREST and GDAL functions
   const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
 
-  // Fetch available tables from PostgREST using Accept-Profile header for specific schema
   const fetchAvailableTables = async (schemaName?: string): Promise<TableInfo[]> => {
     try {
-      const schema = schemaName || 'mapping'; // Default to mapping schema
+      const schema = schemaName || 'mapping';
       console.log(`🔍 Discovering tables in schema: ${schema}`);
 
-      // Use Accept-Profile header to specify which schema to query
       const headers: Record<string, string> = {
         'Accept-Profile': schema
       };
 
-      // Get the OpenAPI spec for the specified schema
       const apiResponse = await fetch(`${POSTGREST_URL}/`, { headers });
       
       if (!apiResponse.ok) {
@@ -609,16 +446,14 @@ export const UploadForm: React.FC = () => {
       const apiSpec = await apiResponse.json();
       const paths = apiSpec.paths || {};
       
-      // Extract table names from paths (excluding /rpc/ endpoints)
       const tableNames = Object.keys(paths)
         .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
-        .map(path => path.substring(1)); // Remove leading slash
+        .map(path => path.substring(1));
       
       console.log(`📋 Discovered tables in ${schema}:`, tableNames);
       
       const availableTables: TableInfo[] = [];
 
-      // Test each discovered table for accessibility
       for (const tableName of tableNames) {
         try {
           const testResponse = await fetch(`${POSTGREST_URL}/${tableName}?limit=0`, { headers });
@@ -645,8 +480,7 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Enhanced analyzeGdbColumnsWithGDAL function
-  const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[] }> => {
+  const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
     const GDAL_SERVICE_URL = '/api/gdal-proxy';
     
     try {
@@ -658,20 +492,18 @@ export const UploadForm: React.FC = () => {
       const gdbFiles = files.filter(f => f.name.includes('.gdb/'));
       if (gdbFiles.length === 0) {
         console.log('No .gdb files found');
-        return { layers: [], columns: [] };
+        return { layers: [], columns: [], gdalResult: null };
       }
       
       const gdbFolderName = gdbFiles[0].name.split('/')[0];
       console.log(`📁 Processing geodatabase: ${gdbFolderName}`);
       
-      // Add files to zip preserving structure
       for (const file of gdbFiles) {
         zip.file(file.name, file);
       }
       
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       
-      // Get layer information
       console.log('Step 1: Discovering layers in geodatabase...');
       
       const formData1 = new FormData();
@@ -692,10 +524,9 @@ export const UploadForm: React.FC = () => {
       
       if (!result1.success || !result1.stdout) {
         console.error('Failed to list layers:', result1.stderr);
-        return { layers: [], columns: [] };
+        return { layers: [], columns: [], gdalResult: null };
       }
       
-      // Parse layer information
       const layersWithFields: LayerInfo[] = [];
       try {
         const gdbInfo = JSON.parse(result1.stdout);
@@ -704,27 +535,26 @@ export const UploadForm: React.FC = () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         console.log(`Found ${layers.length} layers:`, layers.map((l: any) => l.name));
         
-        // Extract fields for each layer
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const layer of layers) {
           const layerFields = new Set<string>();
           
-          // Extract regular fields
           const fields = layer.fields || [];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           for (const field of fields) {
             if (field.name) {
               layerFields.add(field.name);
             }
           }
           
-          // Extract geometry fields
           const geometryFields = layer.geometryFields || [];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           for (const geomField of geometryFields) {
             if (geomField.name) {
               layerFields.add(geomField.name);
             }
           }
           
-          // Add common GIS fields
           const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
           for (const field of commonFields) {
             if (!Array.from(layerFields).some(col => col.toUpperCase() === field.toUpperCase())) {
@@ -741,61 +571,72 @@ export const UploadForm: React.FC = () => {
           
           console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
         }
+
+        const gdalResult: GDALAnalysisResult = {
+          layers: layersWithFields,
+          gdbFolderName: gdbFolderName,
+          totalLayers: layersWithFields.length,
+          analysisTimestamp: new Date().toISOString()
+        };
+
+        if (layersWithFields.length === 1) {
+          console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
+          const resultWithSelection: GDALAnalysisResult = {
+            ...gdalResult,
+            selectedLayer: layersWithFields[0]
+          };
+          
+          return { 
+            layers: layersWithFields, 
+            columns: layersWithFields[0].fields,
+            gdalResult: resultWithSelection
+          };
+        }
+        
+        console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
+        return { 
+          layers: layersWithFields, 
+          columns: [],
+          gdalResult: gdalResult
+        };
         
       } catch (e) {
         console.error('Failed to parse layer list JSON:', e);
-        return { layers: [], columns: [] };
+        return { layers: [], columns: [], gdalResult: null };
       }
-      
-      // If only one layer, select it automatically
-      if (layersWithFields.length === 1) {
-        console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
-        return { 
-          layers: layersWithFields, 
-          columns: layersWithFields[0].fields 
-        };
-      }
-      
-      // Multiple layers found - need user selection
-      console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
-      return { 
-        layers: layersWithFields, 
-        columns: [] // Empty until user selects layer
-      };
       
     } catch (error) {
       console.error('Error using GDAL microservice:', error);
-      return { layers: [], columns: [] };
+      return { layers: [], columns: [], gdalResult: null };
     }
   };
 
-  // Updated analyzeFileColumns function
-  const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[] }> => {
+  const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[], gdalResult?: GDALAnalysisResult | null }> => {
     const allColumns = new Set<string>();
 
-    // Check if we have a geodatabase
     const hasGDB = files.some(f => f.name.includes('.gdb/'));
     
     if (hasGDB) {
-      // Try to extract columns using GDAL microservice
       try {
-        const { layers, columns } = await analyzeGdbColumnsWithGDAL(files);
+        const { layers, columns, gdalResult } = await analyzeGdbColumnsWithGDAL(files);
         
         if (layers.length > 1) {
-          // Multiple layers - need user selection
           setSourceLayerInfo(layers);
+          setGdalAnalysisResult(gdalResult);
           return { 
             needsLayerSelection: true, 
             columns: [], 
-            layers 
+            layers,
+            gdalResult
           };
         } else if (layers.length === 1) {
-          // Single layer - use its columns
           columns.forEach(col => allColumns.add(col));
+          setGdalAnalysisResult(gdalResult);
           if (columns.length > 0) {
             return { 
               needsLayerSelection: false, 
-              columns: Array.from(allColumns) 
+              columns: Array.from(allColumns),
+              gdalResult
             };
           }
         }
@@ -804,7 +645,6 @@ export const UploadForm: React.FC = () => {
       }
     }
 
-    // Process other file types (existing code)
     for (const file of files) {
       try {
         if (file.name.toLowerCase().endsWith('.csv')) {
@@ -822,32 +662,29 @@ export const UploadForm: React.FC = () => {
 
     return { 
       needsLayerSelection: false, 
-      columns: Array.from(allColumns) 
+      columns: Array.from(allColumns),
+      gdalResult: null
     };
   };
 
-  // Analyze DBF files (shapefile attribute tables)
   const analyzeDbfColumns = async (file: File): Promise<string[]> => {
     try {
-      // DBF files have a specific header structure
-      const buffer = await readFileAsArrayBuffer(file, 512); // Read header
+      const buffer = await readFileAsArrayBuffer(file, 512);
       const view = new DataView(buffer);
       
-      // DBF header starts at byte 32 with field descriptors
       const columns: string[] = [];
-      let offset = 32; // Start of field descriptors
+      let offset = 32;
       
       while (offset < buffer.byteLength - 32 && view.getUint8(offset) !== 0x0D) {
-        // Field name is 11 bytes starting at offset
         const nameBytes = new Uint8Array(buffer, offset, 11);
         const decoder = new TextDecoder('ascii');
-        const fieldName = decoder.decode(nameBytes).replace(/\0+$/, ''); // Remove null terminators
+        const fieldName = decoder.decode(nameBytes).replace(/\0+$/, '');
         
         if (fieldName.length > 0) {
           columns.push(fieldName);
         }
         
-        offset += 32; // Each field descriptor is 32 bytes
+        offset += 32;
       }
       
       return columns;
@@ -858,7 +695,6 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Helper function to read file as ArrayBuffer
   const readFileAsArrayBuffer = async (file: File, maxBytes?: number): Promise<ArrayBuffer> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -873,26 +709,6 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  // Handle manual column input submission
-  const handleManualColumnSubmit = () => {
-    const columns = manualColumnInput
-      .split(',')
-      .map(col => col.trim())
-      .filter(col => col.length > 0);
-    
-    // Set the source columns directly
-    setSourceColumns(columns);
-    setShowManualColumnInput(false);
-    setManualColumnInput('');
-  };
-
-  // Handle manual column input cancellation
-  const handleManualColumnCancel = () => {
-    setShowManualColumnInput(false);
-    setManualColumnInput('');
-  };
-
-  // Analyze CSV file to get column headers
   const analyzeCsvColumns = async (file: File): Promise<string[]> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -900,7 +716,6 @@ export const UploadForm: React.FC = () => {
         try {
           const text = e.target?.result as string;
           const firstLine = text.split('\n')[0];
-          // Handle different CSV delimiters
           const delimiters = [',', '\t', ';', '|'];
           let columns: string[] = [];
           
@@ -911,9 +726,8 @@ export const UploadForm: React.FC = () => {
             }
           }
           
-          // Clean column names
           const cleanColumns = columns.map(col => 
-            col.trim().replace(/^["']|["']$/g, '') // Remove quotes
+            col.trim().replace(/^["']|["']$/g, '')
           ).filter(col => col.length > 0);
           
           resolve(cleanColumns);
@@ -926,15 +740,12 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  // Fetch column schema for a specific table using Accept-Profile header
   const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
     try {
-      // Use Accept-Profile header to specify which schema to query
       const headers: Record<string, string> = {
         'Accept-Profile': schema
       };
 
-      // Get the OpenAPI spec to extract column definitions for the specific schema
       const response = await fetch(`${POSTGREST_URL}/`, { headers });
       
       if (!response.ok) {
@@ -951,10 +762,8 @@ export const UploadForm: React.FC = () => {
       const tableDefinition = definitions[tableName];
       const properties = tableDefinition.properties;
       
-      // Convert properties to ColumnInfo format
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const columns: ColumnInfo[] = Object.entries(properties).map(([columnName, columnDef]: [string, any], index) => {
-        // Map PostgREST types to more readable types
         let dataType = columnDef.type || 'string';
         if (columnDef.format) {
           if (columnDef.format.includes('integer')) dataType = 'integer';
@@ -983,6 +792,197 @@ export const UploadForm: React.FC = () => {
       console.error(`Error fetching schema for ${schema}.${tableName}:`, error);
       return [];
     }
+  };
+
+  // Schema validation and metadata functions
+  const handleSchemaValidation = async () => {
+    if (formData.selectedFiles.length === 0) {
+      setUploadMessage('Please select files before validating schema.');
+      return;
+    }
+
+    setIsValidatingSchema(true);
+    setSchemaValidationState('validating');
+    
+    try {
+      const schemaToUse = getSchemaFromDomain(formData.domain);
+      console.log(`🎯 Using schema "${schemaToUse}" for domain "${formData.domain}"`);
+      
+      const tables = await fetchAvailableTables(schemaToUse);
+      setAvailableTables(tables);
+      
+      if (tables.length === 0) {
+        setUploadMessage(`No accessible tables found in the ${schemaToUse} schema. Please check the schema configuration.`);
+        setSchemaValidationState('not_started');
+        return;
+      }
+      
+      const analysisResult = await analyzeFileColumns(formData.selectedFiles);
+      
+      if (analysisResult.gdalResult) {
+        setGdalAnalysisResult(analysisResult.gdalResult);
+      }
+      
+      if (analysisResult.needsLayerSelection) {
+        setSchemaValidationState('layer_selection');
+        setUploadMessage('Multiple layers found. Please select a source layer.');
+        return;
+      }
+      
+      if (analysisResult.columns.length === 0) {
+        const hasGDB = formData.selectedFiles.some(f => f.name.includes('.gdb/'));
+        
+        if (hasGDB) {
+          setShowManualColumnInput(true);
+          setUploadMessage('Could not automatically extract columns from geodatabase. Please enter them manually.');
+          return;
+        } else {
+          setUploadMessage('Could not detect column names from uploaded files. Please upload CSV files or enter columns manually.');
+          setShowManualColumnInput(true);
+          return;
+        }
+      }
+      
+      setSourceColumns(analysisResult.columns);
+      setSchemaValidationState('mapping');
+      
+      if (analysisResult.columns.length > 0) {
+        setUploadMessage(`✅ Successfully extracted ${analysisResult.columns.length} columns from files. Please select a target table and map columns.`);
+      }
+      
+    } catch (error) {
+      console.error('Schema validation error:', error);
+      setUploadMessage('Error during schema validation. Please try again.');
+      setSchemaValidationState('not_started');
+    } finally {
+      setIsValidatingSchema(false);
+    }
+  };
+
+  const handleLayerSelection = (layerName: string) => {
+    setSelectedSourceLayer(layerName);
+    
+    const selectedLayer = sourceLayerInfo.find(layer => layer.name === layerName);
+    if (selectedLayer) {
+      if (gdalAnalysisResult) {
+        setGdalAnalysisResult({
+          ...gdalAnalysisResult,
+          selectedLayer: selectedLayer
+        });
+      }
+      
+      setSourceColumns(selectedLayer.fields);
+      setSchemaValidationState('mapping');
+      setUploadMessage(`✅ Selected layer "${layerName}" with ${selectedLayer.fields.length} columns. Please select a target table and map columns.`);
+    }
+  };
+
+  const handleTableSelection = async (tableFullName: string) => {
+    setSelectedTable(tableFullName);
+    
+    if (tableFullName) {
+      const [schema, tableName] = tableFullName.split('.');
+      const columns = await fetchTableSchema(schema, tableName);
+      setTargetColumns(columns);
+      
+      const newMapping: {[key: string]: string} = {};
+      sourceColumns.forEach(sourceCol => {
+        const matchingTarget = columns.find((targetCol: ColumnInfo) => 
+          targetCol.name.toLowerCase() === sourceCol.toLowerCase()
+        );
+        if (matchingTarget) {
+          newMapping[sourceCol] = matchingTarget.name;
+        }
+      });
+      setColumnMapping(newMapping);
+      
+      const unmappedColumns = sourceColumns.filter(col => !newMapping[col]);
+      if (unmappedColumns.length === 0) {
+        setSchemaValidationState('completed');
+        setUploadMessage('✅ Schema validation completed! All columns mapped successfully. You can now upload.');
+      } else {
+        setUploadMessage(`Please map the remaining ${unmappedColumns.length} columns to complete validation.`);
+      }
+    }
+  };
+
+  const isColumnMappingComplete = (): boolean => {
+    if (formData.loadType === 'full') return true;
+    if (schemaValidationState !== 'mapping' && schemaValidationState !== 'completed') return false;
+    if (sourceColumns.length === 0) return false;
+    if (!selectedTable) return false;
+    
+    return sourceColumns.every(col => columnMapping[col]);
+  };
+
+  useEffect(() => {
+    if (schemaValidationState === 'mapping' && isColumnMappingComplete()) {
+      setSchemaValidationState('completed');
+      setUploadMessage('✅ Schema validation completed! All columns mapped successfully. You can now upload.');
+    }
+  }, [columnMapping, sourceColumns, selectedTable, schemaValidationState]);
+
+  const generateMetadata = () => {
+    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+    
+    return {
+      projectName: formData.projectName,
+      datasetName: formData.datasetName,
+      authorName: formData.authorName,
+      publicationType: formData.publicationType,
+      description: formData.description,
+      domain: effectiveDomain,
+      dataTopic: formData.dataTopic,
+      scale: formData.scale || null,
+      quadName: formData.quadName || null,
+      pubId: formData.pubId || null,
+      loadType: formData.loadType,
+      submittedBy: email,
+      submittedAt: new Date().toISOString(),
+      originalFiles: formData.selectedFiles.map(file => ({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified
+      })),
+      totalFileCount: formData.selectedFiles.length,
+      totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
+      zipFilename: generatedFilename,
+      schemaValidation: formData.loadType !== 'full' ? {
+        validationState: schemaValidationState,
+        targetTable: selectedTable,
+        sourceLayer: selectedSourceLayer,
+        sourceColumns: sourceColumns,
+        columnMapping: columnMapping,
+        validationCompleted: schemaValidationState === 'completed',
+        gdalAnalysis: gdalAnalysisResult,
+        mappingTimestamp: new Date().toISOString()
+      } : null,
+      containsGeodatabase: formData.selectedFiles.some(file => 
+        file.name.includes('.gdb/') || file.name.endsWith('.gdb')
+      ),
+      userAgent: navigator.userAgent,
+      uploadSource: 'UGS Ingest Web Application v2.0 (Enhanced Schema Validation)',
+    };
+  };
+
+  const validateForm = (): boolean => {
+    const newErrors: FormErrors = {};
+    
+    if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
+    if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
+    if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
+    if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
+    if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
+    if (!formData.domain) newErrors.domain = 'Domain is required.';
+    if (formData.domain === 'custom' && !formData.customDomain.trim()) {
+      newErrors.customDomain = 'Custom domain name is required.';
+    }
+    if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
+    if (!formData.loadType) newErrors.loadType = 'Load type is required.';
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
   };
 
   const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
@@ -1018,24 +1018,18 @@ export const UploadForm: React.FC = () => {
   };
 
   const createZipFile = async (): Promise<Blob> => {
-    // Import JSZip dynamically to avoid SSR issues
     const JSZip = (await import('jszip')).default;
     
     const metadata = generateMetadata();
     const metadataJson = JSON.stringify(metadata, null, 2);
     
-    // Create zip file
     const zip = new JSZip();
-    
-    // Add metadata file
     zip.file('metadata.json', metadataJson);
     
-    // Add the original data files in a data folder, preserving directory structure
     formData.selectedFiles.forEach((file) => {
       zip.file(`data/${file.name}`, file);
     });
     
-    // Generate the zip file
     return await zip.generateAsync({ 
       type: 'blob',
       compression: 'DEFLATE',
@@ -1045,108 +1039,6 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  // Updated startSchemaValidation function
-  const startSchemaValidation = async () => {
-    if (formData.selectedFiles.length === 0) {
-      setUploadMessage('Please select files before validating schema.');
-      return;
-    }
-
-    setIsProcessingFolders(true);
-    try {
-      // 1. Get schema from the selected domain
-      const schemaToUse = getSchemaFromDomain(formData.domain);
-      console.log(`🎯 Using schema "${schemaToUse}" for domain "${formData.domain}"`);
-      
-      // 2. Fetch available tables using the domain's schema
-      const tables = await fetchAvailableTables(schemaToUse);
-      setAvailableTables(tables);
-      
-      if (tables.length === 0) {
-        setUploadMessage(`No accessible tables found in the ${schemaToUse} schema. Please check the schema configuration.`);
-        return;
-      }
-      
-      // 3. Analyze uploaded files for column names and layer information
-      const analysisResult = await analyzeFileColumns(formData.selectedFiles);
-      
-      if (analysisResult.needsLayerSelection) {
-        // Show layer selection modal
-        setShowLayerSelection(true);
-        setUploadMessage('Multiple layers found. Please select a source layer.');
-        return;
-      }
-      
-      if (analysisResult.columns.length === 0) {
-        // Check if we have a geodatabase that couldn't be processed
-        const hasGDB = formData.selectedFiles.some(f => f.name.includes('.gdb/'));
-        
-        if (hasGDB) {
-          setShowManualColumnInput(true);
-          setUploadMessage('Could not automatically extract columns from geodatabase. Please enter them manually.');
-          return;
-        } else {
-          setUploadMessage('Could not detect column names from uploaded files. Please upload CSV files or enter columns manually.');
-          setShowManualColumnInput(true);
-          return;
-        }
-      }
-      
-      // Set source columns and continue with schema mapping
-      setSourceColumns(analysisResult.columns);
-      setShowSchemaMapping(true);
-      
-      if (analysisResult.columns.length > 0) {
-        setUploadMessage(`✅ Successfully extracted ${analysisResult.columns.length} columns from files`);
-      }
-      
-    } catch (error) {
-      console.error('Schema validation error:', error);
-      setUploadMessage('Error during schema validation. Please try again.');
-    } finally {
-      setIsProcessingFolders(false);
-    }
-  };
-
-  // Handler for layer selection
-  const handleLayerSelection = (layerName: string) => {
-    setSelectedSourceLayer(layerName);
-    
-    // Find the selected layer and get its columns
-    const selectedLayer = sourceLayerInfo.find(layer => layer.name === layerName);
-    if (selectedLayer) {
-      setSourceColumns(selectedLayer.fields);
-      setShowLayerSelection(false);
-      setShowSchemaMapping(true);
-      setUploadMessage(`✅ Selected layer "${layerName}" with ${selectedLayer.fields.length} columns`);
-    }
-  };
-
-  // Handle target table selection
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleTableSelection = async (tableFullName: string) => {
-    setSelectedTable(tableFullName);
-    
-    if (tableFullName) {
-      const [schema, tableName] = tableFullName.split('.');
-      const columns = await fetchTableSchema(schema, tableName);
-      setTargetColumns(columns);
-      
-      // Initialize mapping - try to auto-match columns with same names
-      const newMapping: {[key: string]: string} = {};
-      sourceColumns.forEach(sourceCol => {
-        const matchingTarget = columns.find((targetCol: ColumnInfo) => 
-          targetCol.name.toLowerCase() === sourceCol.toLowerCase()
-        );
-        if (matchingTarget) {
-          newMapping[sourceCol] = matchingTarget.name;
-        }
-      });
-      setColumnMapping(newMapping);
-    }
-  };
-
-  // Handle form submission
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setUploadMessage('');
@@ -1156,30 +1048,26 @@ export const UploadForm: React.FC = () => {
       return;
     }
 
-    // If load type is not 'full', we need schema validation
-    if (formData.loadType !== 'full') {
-      await startSchemaValidation();
-      return; // Schema validation will call this function again after mapping
+    if (formData.loadType !== 'full' && schemaValidationState !== 'completed') {
+      setUploadMessage('Please complete schema validation before uploading.');
+      return;
     }
 
     setIsSubmitting(true);
 
     try {
-      // Step 1: Create zip file with data and metadata
       setUploadMessage('Creating zip file...');
       const zipBlob = await createZipFile();
       
       console.log('Generated filename:', generatedFilename);
       console.log('Zip file created with size:', zipBlob.size);
 
-      // Step 2: Upload to GCS
       setUploadMessage('Uploading to cloud storage...');
       await uploadZipToGCS(zipBlob, generatedFilename);
 
-      // Step 3: Success!
       setUploadMessage(`✅ Upload successful! File "${generatedFilename}" has been uploaded to cloud storage.`);
       
-      // Reset form after successful submission
+      // Reset form
       setFormData({
         projectName: '',
         datasetName: '',
@@ -1201,8 +1089,9 @@ export const UploadForm: React.FC = () => {
       setSelectedTable('');
       setSelectedSourceLayer('');
       setSourceLayerInfo([]);
+      setSchemaValidationState('not_started');
+      setGdalAnalysisResult(null);
       
-      // Clear the file input element
       const fileInput = document.getElementById('file-input') as HTMLInputElement;
       if (fileInput) {
         fileInput.value = '';
@@ -1217,23 +1106,23 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // Helper function to group files by directory for better display
-  const groupFilesByDirectory = (files: File[]) => {
-    const groups: { [key: string]: File[] } = {};
+  // Manual column input handlers
+  const handleManualColumnSubmit = () => {
+    const columns = manualColumnInput
+      .split(',')
+      .map(col => col.trim())
+      .filter(col => col.length > 0);
     
-    files.forEach(file => {
-      const pathParts = file.name.split('/');
-      if (pathParts.length > 1) {
-        const directory = pathParts[0];
-        if (!groups[directory]) groups[directory] = [];
-        groups[directory].push(file);
-      } else {
-        if (!groups['Files']) groups['Files'] = [];
-        groups['Files'].push(file);
-      }
-    });
-    
-    return groups;
+    setSourceColumns(columns);
+    setShowManualColumnInput(false);
+    setManualColumnInput('');
+    setSchemaValidationState('mapping');
+  };
+
+  const handleManualColumnCancel = () => {
+    setShowManualColumnInput(false);
+    setManualColumnInput('');
+    setSchemaValidationState('not_started');
   };
 
   // Loading state
@@ -1280,365 +1169,47 @@ export const UploadForm: React.FC = () => {
     );
   }
 
-  const fileGroups = groupFilesByDirectory(formData.selectedFiles);
-
-  // Main form (authenticated users only)
+  // Main form render
   return (
     <div className="max-w-4xl mx-auto p-8 bg-white rounded-lg shadow-lg">
-      {/* Layer Selection Modal */}
-      {showLayerSelection && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Select Source Layer</h2>
-            
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-              <p className="text-blue-800 font-semibold mb-2">
-                📁 Multiple Layers Found in Geodatabase
-              </p>
-              <p className="text-blue-700 text-sm">
-                Your file geodatabase contains {sourceLayerInfo.length} layers. Please select which layer you want to import and map to the target schema.
-              </p>
-            </div>
-            
-              <div className="grid gap-4">
-                {sourceLayerInfo.map((layer) => (
-                  <div
-                    key={layer.name}
-                    className={`border rounded-lg p-4 cursor-pointer transition-all duration-200 hover:shadow-md ${
-                      selectedSourceLayer === layer.name
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-300 hover:border-blue-300'
-                    }`}
-                    onClick={() => setSelectedSourceLayer(layer.name)}
-                  >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <input
-                          type="radio"
-                          name="sourceLayer"
-                          value={layer.name}
-                          checked={selectedSourceLayer === layer.name}
-                          onChange={() => setSelectedSourceLayer(layer.name)}
-                          className="text-blue-600"
-                        />
-                        <h3 className="text-lg font-semibold text-gray-800">
-                          {layer.name}
-                        </h3>
-                        <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded">
-                          {layer.geometryType}
-                        </span>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
-                        <div>
-                          <span className="font-medium">Features:</span> {layer.featureCount}
-                        </div>
-                        <div>
-                          <span className="font-medium">Fields:</span> {layer.fields.length}
-                        </div>
-                      </div>
-                      
-                      {/* Show first few field names as preview */}
-                      <div className="mt-2">
-                        <span className="text-sm font-medium text-gray-700">Field Preview: </span>
-                        <span className="text-sm text-gray-600">
-                          {layer.fields.slice(0, 5).join(', ')}
-                          {layer.fields.length > 5 && ` ... (+${layer.fields.length - 5} more)`}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            
-            {/* Selection Summary */}
-            {selectedSourceLayer && (
-              <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-md">
-                <p className="text-green-800 font-medium">
-                  ✅ Selected: {selectedSourceLayer}
-                </p>
-                <p className="text-green-700 text-sm mt-1">
-                  This layer has {sourceLayerInfo.find(l => l.name === selectedSourceLayer)?.fields.length} fields that will be available for column mapping.
-                </p>
-              </div>
-            )}
-            
-            {/* Modal Actions */}
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => {
-                  setShowLayerSelection(false);
-                  setSelectedSourceLayer('');
-                }}
-                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleLayerSelection(selectedSourceLayer)}
-                disabled={!selectedSourceLayer}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Continue with Selected Layer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modals */}
+      <LayerSelectionModal
+        isOpen={schemaValidationState === 'layer_selection'}
+        layers={sourceLayerInfo}
+        selectedLayer={selectedSourceLayer}
+        onLayerSelect={(layerName: string) => setSelectedSourceLayer(layerName)}
+        onConfirm={() => handleLayerSelection(selectedSourceLayer)}
+        onCancel={() => {
+          setSchemaValidationState('not_started');
+          setSelectedSourceLayer('');
+        }}
+      />
 
-      {/* Manual Column Input Modal */}
-      {showManualColumnInput && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Manual Column Entry</h2>
-            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-              <p className="text-yellow-800 font-semibold mb-2">
-                📁 File Geodatabase Detected
-              </p>
-              <p className="text-yellow-700 text-sm">
-                File geodatabases (.gdb) are a proprietary Esri format. Column names cannot be automatically extracted in the browser.
-              </p>
-            </div>
-            
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-              <p className="text-blue-800 font-semibold mb-2">How to get your column names:</p>
-              <ol className="text-blue-700 text-sm list-decimal list-inside space-y-1">
-                <li>Open your .gdb in <strong>ArcGIS Pro</strong> or <strong>QGIS</strong></li>
-                <li>Right-click the layer → <strong>Open Attribute Table</strong></li>
-                <li>Copy the field names from the table headers</li>
-                <li>Paste them below, separated by commas</li>
-              </ol>
-            </div>
-            
-            <div className="mb-4">
-              <label htmlFor="columnInput" className="block text-gray-700 font-semibold mb-2">
-                Column Names:
-              </label>
-              <textarea
-                id="columnInput"
-                value={manualColumnInput}
-                onChange={(e) => setManualColumnInput(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                rows={4}
-                placeholder="OBJECTID, Shape, unit_name, age, description, lithology, map_unit_polygon_id"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Enter column names separated by commas. Common GIS fields include: OBJECTID, Shape, FID, geometry
-              </p>
-            </div>
-            
-            <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-md">
-              <p className="text-gray-700 text-sm font-semibold mb-1">💡 Alternative Options:</p>
-              <ul className="text-gray-600 text-xs space-y-1">
-                <li>• Export your data to <strong>CSV</strong> or <strong>Shapefile</strong> from ArcGIS first</li>
-                <li>• Include a <strong>metadata.json</strong> file with column definitions</li>
-                <li>• Use <strong>GDAL/OGR</strong> tools to convert to an open format</li>
-              </ul>
-            </div>
-            
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={handleManualColumnCancel}
-                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  handleManualColumnSubmit();
-                  // After setting columns, show the schema mapping
-                  if (manualColumnInput.trim()) {
-                    setShowSchemaMapping(true);
-                  }
-                }}
-                disabled={!manualColumnInput.trim()}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Continue with Mapping
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ManualColumnModal
+        isOpen={showManualColumnInput}
+        columnInput={manualColumnInput}
+        onInputChange={setManualColumnInput}
+        onSubmit={handleManualColumnSubmit}
+        onCancel={handleManualColumnCancel}
+      />
 
-      {/* Schema Mapping Modal */}
-      {showSchemaMapping && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Schema Validation & Column Mapping</h2>
-            
-            {/* Show selected layer info if applicable */}
-            {selectedSourceLayer && (
-              <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-md">
-                <p className="text-blue-800 font-semibold mb-1">
-                  📊 Source Layer: {selectedSourceLayer}
-                </p>
-                <p className="text-blue-700 text-sm">
-                  Mapping {sourceColumns.length} columns from the selected geodatabase layer to target table schema.
-                </p>
-              </div>
-            )}
-
-            {/* Table Selection */}
-            <div className="mb-6">
-              <label className="block text-gray-700 font-semibold mb-2">
-                Select Target Table:
-              </label>
-              <select
-                value={selectedTable}
-                onChange={(e) => handleTableSelection(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Choose a target table...</option>
-                {availableTables.map(table => (
-                  <option key={table.fullName} value={table.fullName}>
-                    {table.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {selectedTable && targetColumns.length > 0 && (
-              <>
-                {/* Column Mapping Interface */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                  {/* Source Columns */}
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                      Your File Columns ({sourceColumns.length})
-                      {selectedSourceLayer && (
-                        <span className="text-sm text-gray-600 ml-2">from {selectedSourceLayer}</span>
-                      )}
-                    </h3>
-                    <div className="border border-gray-300 rounded-md p-4 bg-gray-50 max-h-64 overflow-y-auto">
-                      {sourceColumns.map(column => (
-                        <div key={column} className="mb-2">
-                          <div className={`p-2 rounded border ${
-                            columnMapping[column] 
-                              ? 'bg-green-100 border-green-300' 
-                              : 'bg-yellow-100 border-yellow-300'
-                          }`}>
-                            <span className="font-medium">{column}</span>
-                            {columnMapping[column] && (
-                              <span className="text-sm text-green-600 ml-2">
-                                → {columnMapping[column]}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Target Columns */}
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                      Target Table Columns ({targetColumns.length})
-                    </h3>
-                    <div className="border border-gray-300 rounded-md p-4 bg-gray-50 max-h-64 overflow-y-auto">
-                      {targetColumns.map(column => (
-                        <div key={column.name} className="mb-2">
-                          <div className="p-2 rounded border border-gray-200 bg-white">
-                            <span className="font-medium">{column.name}</span>
-                            <span className="text-sm text-gray-500 ml-2">
-                              ({column.dataType})
-                            </span>
-                            {!column.isNullable && (
-                              <span className="text-xs text-red-500 ml-2">Required</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Manual Mapping Interface */}
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Column Mapping</h3>
-                  {sourceColumns.map(sourceCol => (
-                    <div key={sourceCol} className="mb-3 p-3 border border-gray-200 rounded-md">
-                      <div className="flex items-center gap-4">
-                        <div className="flex-1">
-                          <span className="font-medium text-gray-800">{sourceCol}</span>
-                        </div>
-                        <div className="text-gray-500">→</div>
-                        <div className="flex-1">
-                          <select
-                            value={columnMapping[sourceCol] || ''}
-                            onChange={(e) => setColumnMapping(prev => ({
-                              ...prev,
-                              [sourceCol]: e.target.value
-                            }))}
-                            className="w-full px-3 py-1 border border-gray-300 rounded-md text-sm"
-                          >
-                            <option value="">Select target column...</option>
-                            {targetColumns.map(targetCol => (
-                              <option key={targetCol.name} value={targetCol.name}>
-                                {targetCol.name} ({targetCol.dataType})
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Validation Status */}
-                <div className="mb-6">
-                  {sourceColumns.filter(col => !columnMapping[col]).length > 0 ? (
-                    <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-                      <p className="text-yellow-800 font-medium">
-                        ⚠️ Unmapped columns ({sourceColumns.filter(col => !columnMapping[col]).length}):
-                      </p>
-                      <p className="text-yellow-700 text-sm mt-1">
-                        {sourceColumns.filter(col => !columnMapping[col]).join(', ')}
-                      </p>
-                      <p className="text-yellow-600 text-xs mt-2">
-                        All source columns must be mapped before proceeding.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="p-4 bg-green-50 border border-green-200 rounded-md">
-                      <p className="text-green-800 font-medium">
-                        ✅ All columns mapped successfully!
-                      </p>
-                      <p className="text-green-600 text-sm mt-1">
-                        Ready to proceed with upload.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {/* Modal Actions */}
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowSchemaMapping(false)}
-                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
-              >
-                Cancel
-              </button>
-              {sourceColumns.filter(col => !columnMapping[col]).length === 0 && (
-                <button
-                  onClick={() => {
-                    setShowSchemaMapping(false);
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    handleSubmit(new Event('submit') as any);
-                  }}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                >
-                  Proceed with Upload
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <SchemaMappingModal
+        isOpen={schemaValidationState === 'mapping'}
+        selectedSourceLayer={selectedSourceLayer}
+        sourceColumns={sourceColumns}
+        selectedTable={selectedTable}
+        availableTables={availableTables}
+        targetColumns={targetColumns}
+        columnMapping={columnMapping}
+        onTableSelect={handleTableSelection}
+        onColumnMap={(sourceCol, targetCol) => setColumnMapping(prev => ({
+          ...prev,
+          [sourceCol]: targetCol
+        }))}
+        onComplete={() => setSchemaValidationState('completed')}
+        onCancel={() => setSchemaValidationState('not_started')}
+        isComplete={isColumnMappingComplete()}
+      />
 
       {/* User info header */}
       <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
@@ -1655,6 +1226,14 @@ export const UploadForm: React.FC = () => {
         </div>
       </div>
 
+      {/* Schema Validation Status */}
+      <SchemaValidationStatus
+        loadType={formData.loadType}
+        schemaValidationState={schemaValidationState}
+        selectedSourceLayer={selectedSourceLayer}
+        selectedTable={selectedTable}
+      />
+
       {/* Generated filename preview */}
       {generatedFilename && (
         <div className="mb-6 p-4 bg-green-50 rounded-lg border border-green-200">
@@ -1667,405 +1246,48 @@ export const UploadForm: React.FC = () => {
         <h2 className="text-3xl font-bold text-blue-600 mb-6 text-center">Upload Dataset</h2>
 
         {/* Project Information Section */}
-        <div className="mb-8">
-          <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
-            Project Information
-          </h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Project Name */}
-            <div>
-              <label htmlFor="projectName" className="block text-gray-700 font-semibold mb-2">
-                Project Name:
-              </label>
-              <input
-                type="text"
-                id="projectName"
-                name="projectName"
-                value={formData.projectName}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-                  errors.projectName ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="Enter the project name"
-              />
-              {errors.projectName && <p className="text-red-500 text-sm mt-1">{errors.projectName}</p>}
-            </div>
-
-            {/* Dataset Name */}
-            <div>
-              <label htmlFor="datasetName" className="block text-gray-700 font-semibold mb-2">
-                Dataset Name:
-              </label>
-              <input
-                type="text"
-                id="datasetName"
-                name="datasetName"
-                value={formData.datasetName}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-                  errors.datasetName ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="Enter the dataset name"
-              />
-              {errors.datasetName && <p className="text-red-500 text-sm mt-1">{errors.datasetName}</p>}
-            </div>
-
-            {/* Author Name */}
-            <div>
-              <label htmlFor="authorName" className="block text-gray-700 font-semibold mb-2">
-                Author Name:
-              </label>
-              <input
-                type="text"
-                id="authorName"
-                name="authorName"
-                value={formData.authorName}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-                  errors.authorName ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="Author name (auto-filled from your account)"
-              />
-              {errors.authorName && <p className="text-red-500 text-sm mt-1">{errors.authorName}</p>}
-            </div>
-
-            {/* Publication Type */}
-            <div>
-              <label htmlFor="publicationType" className="block text-gray-700 font-semibold mb-2">
-                Publication Type:
-              </label>
-              <select
-                id="publicationType"
-                name="publicationType"
-                value={formData.publicationType}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
-                  errors.publicationType ? 'border-red-500' : 'border-gray-300'
-                }`}
-              >
-                {publicationTypeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {errors.publicationType && <p className="text-red-500 text-sm mt-1">{errors.publicationType}</p>}
-            </div>
-          </div>
-
-          {/* Description */}
-          <div className="mt-6">
-            <label htmlFor="description" className="block text-gray-700 font-semibold mb-2">
-              Description (Optional):
-            </label>
-            <textarea
-              id="description"
-              name="description"
-              value={formData.description}
-              onChange={handleChange}
-              rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 resize-vertical"
-              placeholder="Provide additional details about the dataset"
-            />
-          </div>
-        </div>
+        <ProjectInfoForm
+          formData={formData}
+          errors={errors}
+          handleChange={handleChange}
+        />
 
         {/* File Naming Convention Section */}
-        <div className="mb-8">
-          <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
-            File Naming Convention
-          </h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Domain */}
-            <div>
-              <label htmlFor="domain" className="block text-gray-700 font-semibold mb-2">
-                Domain: <span className="text-red-500">*</span>
-              </label>
-              <select
-                id="domain"
-                name="domain"
-                value={formData.domain}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
-                  errors.domain ? 'border-red-500' : 'border-gray-300'
-                }`}
-              >
-                {domainOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {errors.domain && <p className="text-red-500 text-sm mt-1">{errors.domain}</p>}
-            </div>
-
-            {/* Custom Domain (conditional) */}
-            {formData.domain === 'custom' && (
-              <div>
-                <label htmlFor="customDomain" className="block text-gray-700 font-semibold mb-2">
-                  Custom Domain: <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  id="customDomain"
-                  name="customDomain"
-                  value={formData.customDomain}
-                  onChange={handleChange}
-                  className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-                    errors.customDomain ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                  placeholder="Enter custom domain name"
-                />
-                {errors.customDomain && <p className="text-red-500 text-sm mt-1">{errors.customDomain}</p>}
-              </div>
-            )}
-
-            {/* Data Topic */}
-            <div>
-              <label htmlFor="dataTopic" className="block text-gray-700 font-semibold mb-2">
-                Data Topic: <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="dataTopic"
-                name="dataTopic"
-                value={formData.dataTopic}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-                  errors.dataTopic ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="e.g., geolunits, alluvial_fan, wetland_inventory"
-              />
-              {errors.dataTopic && <p className="text-red-500 text-sm mt-1">{errors.dataTopic}</p>}
-            </div>
-
-            {/* Scale */}
-            <div>
-              <label htmlFor="scale" className="block text-gray-700 font-semibold mb-2">
-                Scale:
-              </label>
-              <input
-                type="text"
-                id="scale"
-                name="scale"
-                value={formData.scale}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                placeholder="e.g., 30x60, 7.5"
-              />
-            </div>
-
-            {/* Quad Name */}
-            <div>
-              <label htmlFor="quadName" className="block text-gray-700 font-semibold mb-2">
-                Quad Name:
-              </label>
-              <input
-                type="text"
-                id="quadName"
-                name="quadName"
-                value={formData.quadName}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                placeholder="USGS quad name"
-              />
-            </div>
-
-            {/* Publication ID */}
-            <div>
-              <label htmlFor="pubId" className="block text-gray-700 font-semibold mb-2">
-                Publication ID:
-              </label>
-              <input
-                type="text"
-                id="pubId"
-                name="pubId"
-                value={formData.pubId}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500"
-                placeholder="e.g., OFR-123"
-              />
-            </div>
-
-            {/* Load Type */}
-            <div>
-              <label htmlFor="loadType" className="block text-gray-700 font-semibold mb-2">
-                Load Type: <span className="text-red-500">*</span>
-              </label>
-              <select
-                id="loadType"
-                name="loadType"
-                value={formData.loadType}
-                onChange={handleChange}
-                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
-                  errors.loadType ? 'border-red-500' : 'border-gray-300'
-                }`}
-              >
-                {loadTypeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {errors.loadType && <p className="text-red-500 text-sm mt-1">{errors.loadType}</p>}
-            </div>
-          </div>
-        </div>
+        <NamingConventionForm
+          formData={formData}
+          errors={errors}
+          handleChange={handleChange}
+        />
 
         {/* File Upload Section */}
-        <div className="mb-6">
-          <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
-            Data Files
-          </h3>
-          
-          <label htmlFor="file-input" className="block text-gray-700 font-semibold mb-2">
-            Select Data Files or Folders: <span className="text-red-500">*</span>
-          </label>
-          <div
-            className={`border-2 border-dashed rounded-lg p-8 text-center text-gray-500 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center min-h-[150px] ${
-              isDragging 
-                ? 'border-blue-500 bg-blue-50' 
-                : errors.selectedFiles 
-                  ? 'border-red-500' 
-                  : 'border-gray-400'
-            }`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <input
-              type="file"
-              id="file-input"
-              multiple
-              onChange={handleFileChange}
-              className="hidden"
-              accept="*/*"
-            />
-            <div className="mb-4">
-              <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            {isProcessingFolders ? (
-              <div className="flex items-center">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                <p>Processing folders...</p>
-              </div>
-            ) : (
-              <>
-                <p className="mb-2">Drag & drop files or folders here (including .gdb), or</p>
-                <button
-                  type="button"
-                  onClick={handleFileOrFolderSelect}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200 text-base"
-                >
-                  Choose Files or Folder
-                </button>
-                <p className="text-xs text-gray-500 mt-2">
-                  ✅ Supports File Geodatabases (.gdb folders)<br/>
-                  ✅ Shapefiles, CSVs, and other individual files<br/>
-                  ✅ Multiple selection with Ctrl/Cmd<br/>
-                  💡 Button will ask whether you want files or folders
-                </p>
-              </>
-            )}
-            
-            {/* Selected Files Display */}
-            {formData.selectedFiles.length > 0 && (
-              <div className="mt-4 w-full">
-                <div className="text-left">
-                  <p className="font-bold text-green-800 mb-2">
-                    Selected Files ({formData.selectedFiles.length}):
-                  </p>
-                  <div className="max-h-64 overflow-y-auto space-y-3">
-                    {Object.entries(fileGroups).map(([groupName, files]) => (
-                      <div key={groupName} className="border border-green-200 rounded-md">
-                        <div className="bg-green-100 px-3 py-2 border-b border-green-200">
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-green-800">
-                              {groupName.endsWith('.gdb') ? `📁 ${groupName} (File Geodatabase)` : `📁 ${groupName}`}
-                            </span>
-                            <span className="text-sm text-green-600">
-                              {files.length} file{files.length !== 1 ? 's' : ''}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="max-h-32 overflow-y-auto">
-                          {files.map((file, fileIndex) => {
-                            const globalIndex = formData.selectedFiles.indexOf(file);
-                            return (
-                              <div key={fileIndex} className="flex items-center justify-between p-2 border-b border-green-100 last:border-b-0 hover:bg-green-50">
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm text-green-800 truncate">
-                                    {file.name.includes('/') ? file.name.split('/').pop() : file.name}
-                                  </p>
-                                  <p className="text-xs text-green-600">
-                                    {(file.size / 1024 / 1024).toFixed(2)} MB
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => removeFile(globalIndex)}
-                                  className="ml-2 p-1 text-red-500 hover:text-red-700 hover:bg-red-100 rounded"
-                                  title="Remove file"
-                                >
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                                  </svg>
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-3 pt-2 border-t border-green-200">
-                    <p className="text-sm text-green-600">
-                      Total Size: {(formData.selectedFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-          {errors.selectedFiles && <p className="text-red-500 text-sm mt-1">{errors.selectedFiles}</p>}
-        </div>
+        <FileUploadSection
+          formData={formData}
+          errors={errors}
+          isDragging={isDragging}
+          isProcessingFolders={isProcessingFolders}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onFileOrFolderSelect={handleFileOrFolderSelect}
+          onFileChange={handleFileChange}
+          onRemoveFile={removeFile}
+        />
 
-        {/* Submission Button */}
-        <div className="flex items-center justify-between mt-8">
-          <button
-            type="submit"
-            disabled={isSubmitting || isProcessingFolders}
-            className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200 text-base font-semibold"
-          >
-            {isSubmitting ? (
-              <div className="flex items-center">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                {uploadMessage.includes('Creating') ? 'Creating Zip...' : 
-                 uploadMessage.includes('Uploading') ? 'Uploading...' : 
-                 'Processing...'}
-              </div>
-            ) : formData.loadType !== 'full' ? (
-              'Validate Schema & Upload'
-            ) : (
-              'Create & Upload'
-            )}
-          </button>
-          {uploadMessage && (
-            <div className={`ml-4 p-3 rounded-md font-medium ${
-              uploadMessage.includes('error') || uploadMessage.includes('failed') || uploadMessage.includes('❌')
-                ? 'bg-red-50 text-red-700 border border-red-200' 
-                : 'bg-green-50 text-green-700 border border-green-200'
-            }`}>
-              {uploadMessage}
-            </div>
-          )}
-        </div>
+        {/* Action Buttons */}
+        <ActionButtons
+          loadType={formData.loadType}
+          schemaValidationState={schemaValidationState}
+          isValidatingSchema={isValidatingSchema}
+          isSubmitting={isSubmitting}
+          isProcessingFolders={isProcessingFolders}
+          selectedFilesCount={formData.selectedFiles.length}
+          domain={formData.domain}
+          uploadMessage={uploadMessage}
+          onSchemaValidation={handleSchemaValidation}
+          onSubmit={handleSubmit}
+        />
 
-        {/* Naming Convention Info */}
+        {/* Info sections */}
         <div className="mt-6 p-4 bg-gray-50 rounded-md border border-gray-200">
           <h4 className="text-sm font-semibold text-gray-800 mb-2">File Naming Convention:</h4>
           <p className="text-xs text-gray-600 font-mono">
@@ -2077,33 +1299,17 @@ export const UploadForm: React.FC = () => {
           </p>
         </div>
 
-        {/* Enhanced Info Box */}
         <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
           <p className="text-xs text-blue-700">
-            <strong>Enhanced Geodatabase Support:</strong> The application now supports layer selection for geodatabases with multiple layers! 
-            Each layer can be imported separately with proper column mapping.
+            <strong>Enhanced Schema Validation:</strong> The application now supports separated schema validation and upload workflows! 
+            Complete field mapping validation before uploading to ensure data integrity and proper schema compliance.
           </p>
-          {/* Development: Test table discovery */}
-          {process.env.NODE_ENV === 'development' && (
-            <button
-              type="button"
-              onClick={async () => {
-                console.log('🔍 Testing table discovery...');
-                const tables = await fetchAvailableTables();
-                console.log('📋 Discovered tables:', tables);
-              }}
-              className="mt-2 px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
-            >
-              Test Table Discovery (Dev Only)
-            </button>
-          )}
         </div>
 
-        {/* Audit Trail Info */}
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
           <p className="text-xs text-gray-600">
             <strong>Audit Trail:</strong> All uploads are logged with user identification, timestamp, 
-            and file details. A metadata.json file will be included in the zip with complete audit information.
+            file details, and schema validation results. A metadata.json file will be included in the zip with complete audit information.
           </p>
         </div>
       </form> 
