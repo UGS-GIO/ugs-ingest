@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { GoogleAuth } from 'google-auth-library';
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -8,6 +9,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// Initialize Google Auth client for service-to-service authentication
+const auth = new GoogleAuth();
 
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')));
@@ -32,6 +36,92 @@ app.get('/api/user', (req, res) => {
   });
 });
 
+// Proxy endpoint for GDAL microservice with authentication
+// IMPORTANT: This route must come BEFORE the express.raw middleware
+app.post('/api/gdal-proxy/*', async (req, res) => {
+  try {
+    const gdalPath = req.params[0] || ''; // Get the path after /api/gdal-proxy/
+    const gdalUrl = `https://gdal-microservice-534590904912.us-central1.run.app/${gdalPath}`;
+    
+    console.log(`Proxying GDAL request to: ${gdalUrl}`);
+    
+    // Get an ID token for service-to-service authentication
+    let idToken = '';
+    try {
+      const client = await auth.getIdTokenClient(gdalUrl);
+      const token = await client.idTokenProvider.fetchIdToken(gdalUrl);
+      idToken = token;
+      console.log('Successfully obtained ID token for GDAL service');
+      console.log('Token length:', idToken.length);
+    } catch (authError) {
+      console.error('Failed to get ID token:', authError);
+      // If we can't get a token, try anyway (might work if service allows unauthenticated)
+    }
+    
+    // Collect the request body while preserving multipart data
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks);
+    
+    // Prepare headers for the GDAL service - preserve original headers
+    const headers = {
+      'Content-Type': req.headers['content-type'], // Keep exact content-type with boundary
+      'Content-Length': body.length.toString(),
+    };
+    
+    // Add authorization header if we have a token
+    if (idToken) {
+      headers['Authorization'] = `Bearer ${idToken}`;
+    }
+    
+    console.log('Request headers being sent:', Object.keys(headers));
+    console.log('Has Authorization header:', 'Authorization' in headers);
+    console.log('Authorization header starts with:', headers['Authorization'] ? headers['Authorization'].substring(0, 20) : 'none');
+    console.log('Content-Type:', headers['Content-Type']);
+    console.log('Body size:', body.length, 'bytes');
+    
+    // Forward the request to GDAL microservice
+    const gdalResponse = await fetch(gdalUrl, {
+      method: 'POST',
+      headers: headers,
+      body: body // Use the collected buffer
+    });
+    
+    console.log('GDAL response status:', gdalResponse.status);
+    console.log('GDAL response headers:', Object.fromEntries(gdalResponse.headers));
+    
+    if (!gdalResponse.ok) {
+      const errorText = await gdalResponse.text();
+      console.error('GDAL service error details:');
+      console.error(errorText);
+      return res.status(gdalResponse.status).json({ 
+        error: 'GDAL service error', 
+        status: gdalResponse.status,
+        details: errorText 
+      });
+    }
+    
+    const result = await gdalResponse.json();
+    res.json(result);
+    
+  } catch (error) {
+    console.error('GDAL proxy error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process GDAL request',
+      details: error.message 
+    });
+  }
+});
+
+// NOW apply the middleware for other routes that might need it
+// This middleware will NOT affect the GDAL proxy route above
+app.use(express.raw({ 
+  type: 'multipart/form-data', 
+  limit: '100mb' 
+}));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy' });
@@ -48,4 +138,6 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Running on Cloud Run: ${process.env.K_SERVICE !== undefined}`);
+  console.log(`Service Account: ${process.env.K_SERVICE ? 'Will use metadata service' : 'Local development'}`);
 });
