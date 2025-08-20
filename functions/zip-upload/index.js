@@ -73,7 +73,10 @@ functions.http('ugs-zip-upload', async (req, res) => {
         'x-goog-meta-uploaded-by': userEmail,
         'x-goog-meta-uploaded-at': new Date().toISOString(),
         'x-goog-meta-source': 'UGS-Ingest-Web-Application',
-        'x-goog-meta-file-size': fileSize || 'unknown'
+        'x-goog-meta-file-size': fileSize || 'unknown',
+        'x-goog-meta-original-filename': '', // Will be set by frontend
+        'x-goog-meta-file-size-bytes': '', // Will be set by frontend
+        'x-goog-meta-file-size-mb': '' // Will be set by frontend
       }
     };
 

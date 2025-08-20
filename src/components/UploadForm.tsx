@@ -485,13 +485,10 @@ export const UploadForm: React.FC = () => {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/zip',
-          // These metadata headers will be stored with the file
+          // Only include the metadata headers that were signed in the URL
           'x-goog-meta-uploaded-by': uploadedBy,
           'x-goog-meta-uploaded-at': new Date().toISOString(),
           'x-goog-meta-source': 'UGS-Ingest-Web-Application',
-          'x-goog-meta-original-filename': filename,
-          'x-goog-meta-file-size-bytes': zipBlob.size.toString(),
-          'x-goog-meta-file-size-mb': fileSizeMB,
         },
         body: zipBlob,
       });
