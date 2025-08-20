@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^3.3.0",
-    "@google-cloud/storage": "^7.7.0"
+    "@google-cloud/storage": "^7.17.0"
   },
   "scripts": {
     "start": "functions-framework --target=ugs-zip-upload",
