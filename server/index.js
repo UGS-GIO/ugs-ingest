@@ -17,8 +17,9 @@ const auth = new GoogleAuth();
 // Initialize Cloud Storage client for cleanup operations
 const gcsStorage = new Storage();
 
-// Serve static files from the dist directory
+// Middleware
 app.use(express.static(path.join(__dirname, '../dist')));
+app.use(express.json({ limit: '50mb' })); // Add this for JSON parsing
 
 // API endpoint to get IAP user information
 app.get('/api/user', (req, res) => {
@@ -40,7 +41,160 @@ app.get('/api/user', (req, res) => {
   });
 });
 
-// Enhanced GDAL proxy endpoint with size checking and better error handling
+// SPECIFIC ROUTES FIRST (before the catch-all route)
+
+// New endpoint: Analyze geodatabase from Cloud Storage (for large files)
+app.post('/api/gdal-proxy/analyze-from-storage', async (req, res) => {
+  try {
+    const { bucket, filename, gdbFolderName, command, args } = req.body;
+    
+    console.log(`🔍 GDAL analysis request from Cloud Storage:`);
+    console.log(`  Bucket: ${bucket}`);
+    console.log(`  File: ${filename}`);
+    console.log(`  GDB Folder: ${gdbFolderName}`);
+    console.log(`  Command: ${command}`);
+    console.log(`  Args: ${JSON.stringify(args)}`);
+    
+    // Construct the Cloud Storage path for GDAL
+    const gcsPath = `/vsizip/gs://${bucket}/${filename}/${gdbFolderName}`;
+    console.log(`  GCS Path: ${gcsPath}`);
+    
+    // Get an ID token for service-to-service authentication
+    let idToken = '';
+    try {
+      const gdalBaseUrl = `https://gdal-microservice-534590904912.us-central1.run.app/`;
+      const client = await auth.getIdTokenClient(gdalBaseUrl);
+      const token = await client.idTokenProvider.fetchIdToken(gdalBaseUrl);
+      idToken = token;
+      console.log('✅ Successfully obtained ID token for GDAL service');
+    } catch (authError) {
+      console.error('⚠️ Failed to get ID token:', authError);
+    }
+    
+    // Prepare the request to GDAL microservice
+    const gdalRequest = {
+      command: command,
+      args: args.map(arg => arg.replace(`/vsizip/${filename}/${gdbFolderName}`, gcsPath))
+    };
+    
+    console.log(`📤 Sending request to GDAL microservice:`, gdalRequest);
+    
+    // Make request to GDAL microservice
+    const gdalUrl = 'https://gdal-microservice-534590904912.us-central1.run.app/execute';
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (idToken) {
+      headers['Authorization'] = `Bearer ${idToken}`;
+    }
+    
+    const gdalResponse = await fetch(gdalUrl, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(gdalRequest)
+    });
+    
+    console.log('GDAL response status:', gdalResponse.status);
+    
+    if (!gdalResponse.ok) {
+      const errorText = await gdalResponse.text();
+      console.error('GDAL service error:', errorText);
+      return res.status(gdalResponse.status).json({ 
+        success: false,
+        error: 'GDAL service error', 
+        status: gdalResponse.status,
+        details: errorText 
+      });
+    }
+    
+    const result = await gdalResponse.json();
+    console.log('✅ GDAL analysis completed successfully');
+    
+    res.json(result);
+    
+  } catch (error) {
+    console.error('❌ Error in GDAL Cloud Storage analysis:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to analyze geodatabase from Cloud Storage',
+      details: error.message 
+    });
+  }
+});
+
+// New endpoint: Clean up temporary analysis files
+app.post('/api/gdal-proxy/cleanup-temp-file', async (req, res) => {
+  try {
+    const { bucket, filename } = req.body;
+    
+    console.log(`🧹 Cleaning up temporary file: gs://${bucket}/${filename}`);
+    
+    // Delete the temporary file from Cloud Storage
+    const file = gcsStorage.bucket(bucket).file(filename);
+    
+    try {
+      await file.delete();
+      console.log(`✅ Successfully deleted temporary file: ${filename}`);
+      res.json({ success: true, message: 'Temporary file cleaned up' });
+    } catch (deleteError) {
+      if (deleteError.code === 404) {
+        console.log(`ℹ️ Temporary file already deleted or doesn't exist: ${filename}`);
+        res.json({ success: true, message: 'File already cleaned up' });
+      } else {
+        throw deleteError;
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Error cleaning up temporary file:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to cleanup temporary file',
+      details: error.message 
+    });
+  }
+});
+
+// New endpoint: Update file metadata
+app.post('/api/update-file-metadata', async (req, res) => {
+  try {
+    const { filename, metadata } = req.body;
+    
+    if (!filename) {
+      return res.status(400).json({ success: false, error: 'Filename is required' });
+    }
+
+    console.log(`📝 Updating metadata for file: ${filename}`);
+    console.log('Received metadata:', metadata);
+    
+    // Get the file from GCS
+    const bucket = gcsStorage.bucket('stagedzips');
+    const file = bucket.file(filename);
+    
+    // Update the file metadata
+    await file.setMetadata({
+      metadata: metadata
+    });
+    
+    console.log(`✅ Metadata updated for: ${filename}`);
+    
+    res.json({
+      success: true,
+      filename: filename,
+      message: 'Metadata updated successfully'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error updating file metadata:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update metadata: ' + error.message
+    });
+  }
+});
+
+// GENERAL GDAL PROXY ROUTE (comes AFTER specific routes)
 app.post('/api/gdal-proxy/*', async (req, res) => {
   try {
     const gdalPath = req.params[0] || '';
@@ -134,155 +288,6 @@ app.post('/api/gdal-proxy/*', async (req, res) => {
     console.error('GDAL proxy error:', error);
     res.status(500).json({ 
       error: 'Failed to process GDAL request',
-      details: error.message 
-    });
-  }
-});
-
-// New endpoint: Analyze geodatabase from Cloud Storage (for large files)
-app.post('/api/gdal-proxy/analyze-from-storage', async (req, res) => {
-  try {
-    const { bucket, filename, gdbFolderName, command, args } = req.body;
-    
-    console.log(`🔍 GDAL analysis request from Cloud Storage:`);
-    console.log(`  Bucket: ${bucket}`);
-    console.log(`  File: ${filename}`);
-    console.log(`  GDB Folder: ${gdbFolderName}`);
-    console.log(`  Command: ${command}`);
-    console.log(`  Args: ${JSON.stringify(args)}`);
-    
-    // Construct the Cloud Storage path for GDAL
-    const gcsPath = `/vsizip/gs://${bucket}/${filename}/${gdbFolderName}`;
-    console.log(`  GCS Path: ${gcsPath}`);
-    
-    // Get an ID token for service-to-service authentication
-    let idToken = '';
-    try {
-      const gdalBaseUrl = `https://gdal-microservice-534590904912.us-central1.run.app/`;
-      const client = await auth.getIdTokenClient(gdalBaseUrl);
-      const token = await client.idTokenProvider.fetchIdToken(gdalBaseUrl);
-      idToken = token;
-      console.log('✅ Successfully obtained ID token for GDAL service');
-    } catch (authError) {
-      console.error('⚠️ Failed to get ID token:', authError);
-    }
-    
-    // Prepare the request to GDAL microservice
-    const gdalRequest = {
-      command: command,
-      args: args.map(arg => arg.replace(`/vsizip/${filename}/${gdbFolderName}`, gcsPath))
-    };
-    
-    console.log(`📤 Sending request to GDAL microservice:`, gdalRequest);
-    
-    // Make request to GDAL microservice
-    const gdalUrl = 'https://gdal-microservice-534590904912.us-central1.run.app/execute';
-    const headers = {
-      'Content-Type': 'application/json',
-    };
-    
-    if (idToken) {
-      headers['Authorization'] = `Bearer ${idToken}`;
-    }
-    
-    const gdalResponse = await fetch(gdalUrl, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(gdalRequest)
-    });
-    
-    console.log('GDAL response status:', gdalResponse.status);
-    
-    if (!gdalResponse.ok) {
-      const errorText = await gdalResponse.text();
-      console.error('GDAL service error:', errorText);
-      return res.status(gdalResponse.status).json({ 
-        success: false,
-        error: 'GDAL service error', 
-        status: gdalResponse.status,
-        details: errorText 
-      });
-    }
-    
-    const result = await gdalResponse.json();
-    console.log('✅ GDAL analysis completed successfully');
-    
-    res.json(result);
-    
-  } catch (error) {
-    console.error('❌ Error in GDAL Cloud Storage analysis:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to analyze geodatabase from Cloud Storage',
-      details: error.message 
-    });
-  }
-});
-
-app.post('/api/update-file-metadata', async (req, res) => {
-  try {
-    const { filename, metadata } = req.body;
-    
-    if (!filename) {
-      return res.status(400).json({ success: false, error: 'Filename is required' });
-    }
-
-    console.log(`📝 Updating metadata for file: ${filename}`);
-    
-    // Get the file from GCS
-    const bucket = gcsStorage.bucket('stagedzips');
-    const file = bucket.file(filename);
-    
-    // Update the file metadata
-    await file.setMetadata({
-      metadata: metadata
-    });
-    
-    console.log(`✅ Metadata updated for: ${filename}`);
-    
-    res.json({
-      success: true,
-      filename: filename,
-      message: 'Metadata updated successfully'
-    });
-    
-  } catch (error) {
-    console.error('❌ Error updating file metadata:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to update metadata: ' + error.message
-    });
-  }
-});
-
-// New endpoint: Clean up temporary analysis files
-app.post('/api/gdal-proxy/cleanup-temp-file', async (req, res) => {
-  try {
-    const { bucket, filename } = req.body;
-    
-    console.log(`🧹 Cleaning up temporary file: gs://${bucket}/${filename}`);
-    
-    // Delete the temporary file from Cloud Storage
-    const file = gcsStorage.bucket(bucket).file(filename);
-    
-    try {
-      await file.delete();
-      console.log(`✅ Successfully deleted temporary file: ${filename}`);
-      res.json({ success: true, message: 'Temporary file cleaned up' });
-    } catch (deleteError) {
-      if (deleteError.code === 404) {
-        console.log(`ℹ️ Temporary file already deleted or doesn't exist: ${filename}`);
-        res.json({ success: true, message: 'File already cleaned up' });
-      } else {
-        throw deleteError;
-      }
-    }
-    
-  } catch (error) {
-    console.error('❌ Error cleaning up temporary file:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to cleanup temporary file',
       details: error.message 
     });
   }
