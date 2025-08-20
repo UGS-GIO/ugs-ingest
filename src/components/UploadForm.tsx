@@ -985,37 +985,88 @@ export const UploadForm: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
+  //New upload function with tracking
+  const uploadZipToGCS = async (
+    zipBlob: Blob, 
+    filename: string,
+    onProgress?: (progress: number) => void
+  ): Promise<boolean> => {
     try {
       const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
       
-      console.log('Uploading to Cloud Function:', functionUrl);
-      console.log('Filename:', filename);
-      console.log('Zip size:', zipBlob.size, 'bytes');
+      console.log('🔄 Starting upload with progress tracking...');
 
-      const response = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}`, {
+      // Phase 1: Get signed URL (same as above)
+      const signedUrlResponse = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}&fileSize=${zipBlob.size}`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/zip',
+          'Content-Type': 'application/json',
           'X-Filename': filename,
+          'X-File-Size': zipBlob.size.toString(),
         },
-        body: zipBlob,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(`Upload failed: ${errorData.error || response.statusText}`);
+      if (!signedUrlResponse.ok) {
+        const errorData = await signedUrlResponse.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Failed to get signed URL: ${errorData.error}`);
       }
 
-      const result = await response.json();
-      console.log('✅ Upload successful:', result);
-      return true;
+      const { signedUrl, uploadedBy } = await signedUrlResponse.json();
+
+      // Phase 2: Upload with XMLHttpRequest for progress tracking
+      return new Promise<boolean>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        
+        // Track upload progress
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable && onProgress) {
+            const progress = (event.loaded / event.total) * 100;
+            onProgress(progress);
+            console.log(`📊 Upload progress: ${progress.toFixed(1)}% (${(event.loaded / 1024 / 1024).toFixed(1)}MB / ${(event.total / 1024 / 1024).toFixed(1)}MB)`);
+          }
+        });
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            console.log('✅ Upload with progress completed successfully');
+            resolve(true);
+          } else {
+            console.error('❌ Upload failed:', xhr.status, xhr.statusText);
+            reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+          }
+        });
+
+        xhr.addEventListener('error', (event) => {
+          console.error('❌ Upload network error:', event);
+          reject(new Error('Upload failed due to network error'));
+        });
+
+        xhr.addEventListener('timeout', () => {
+          console.error('❌ Upload timeout');
+          reject(new Error('Upload timed out'));
+        });
+
+        // Configure the request
+        xhr.open('PUT', signedUrl);
+        xhr.setRequestHeader('Content-Type', 'application/zip');
+        xhr.setRequestHeader('x-goog-meta-uploaded-by', uploadedBy);
+        xhr.setRequestHeader('x-goog-meta-uploaded-at', new Date().toISOString());
+        xhr.setRequestHeader('x-goog-meta-source', 'UGS-Ingest-Web-Application');
+        
+        // Set timeout for large files (30 minutes)
+        xhr.timeout = 30 * 60 * 1000;
+        
+        // Start the upload
+        xhr.send(zipBlob);
+      });
 
     } catch (error) {
-      console.error('❌ Upload to GCS failed:', error);
+      console.error('❌ Upload with progress failed:', error);
       throw error;
     }
   };
+
+  
 
   const createZipFile = async (): Promise<Blob> => {
     const JSZip = (await import('jszip')).default;
@@ -1039,6 +1090,9 @@ export const UploadForm: React.FC = () => {
     });
   };
 
+
+  // Update your handleSubmit function to use better progress messages
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setUploadMessage('');
@@ -1056,18 +1110,29 @@ export const UploadForm: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      setUploadMessage('Creating zip file...');
+      // Step 1: Create zip file
+      setUploadMessage('📦 Creating zip file...');
       const zipBlob = await createZipFile();
       
-      console.log('Generated filename:', generatedFilename);
-      console.log('Zip file created with size:', zipBlob.size);
+      const fileSizeMB = (zipBlob.size / 1024 / 1024).toFixed(2);
+      console.log(`📦 Zip file created: ${generatedFilename} (${fileSizeMB}MB)`);
 
-      setUploadMessage('Uploading to cloud storage...');
+      // Step 2: Show appropriate message based on file size
+      if (zipBlob.size > 100 * 1024 * 1024) { // 100MB+
+        setUploadMessage(`📤 Uploading large file (${fileSizeMB}MB) - this may take several minutes...`);
+      } else if (zipBlob.size > 10 * 1024 * 1024) { // 10MB+
+        setUploadMessage(`📤 Uploading file (${fileSizeMB}MB) - please wait...`);
+      } else {
+        setUploadMessage('📤 Uploading to cloud storage...');
+      }
+
+      // Step 3: Upload using signed URLs
       await uploadZipToGCS(zipBlob, generatedFilename);
 
-      setUploadMessage(`✅ Upload successful! File "${generatedFilename}" has been uploaded to cloud storage.`);
+      // Step 4: Success message
+      setUploadMessage(`✅ Upload successful! File "${generatedFilename}" (${fileSizeMB}MB) has been uploaded to cloud storage.`);
       
-      // Reset form
+      // Reset form (keep your existing reset logic)
       setFormData({
         projectName: '',
         datasetName: '',
