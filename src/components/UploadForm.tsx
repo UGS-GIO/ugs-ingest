@@ -428,106 +428,107 @@ export const UploadForm: React.FC = () => {
   // ==========================================
   // UPDATED UPLOAD FUNCTION WITH SIGNED URLS
   // ==========================================
-  const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
-    try {
-      const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
-      
-      const fileSizeMB = (zipBlob.size / 1024 / 1024).toFixed(2);
-      console.log('🔄 Starting two-phase upload process...');
-      console.log(`📦 File: ${filename}`);
-      console.log(`📏 Size: ${zipBlob.size} bytes (${fileSizeMB}MB)`);
+ const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
+  try {
+    const fileSizeMB = (zipBlob.size / 1024 / 1024).toFixed(2);
+    console.log('Starting upload process...');
+    console.log(`File: ${filename}`);
+    console.log(`Size: ${zipBlob.size} bytes (${fileSizeMB}MB)`);
 
-      // ================================
-      // PHASE 1: Get Signed URL
-      // ================================
-      console.log('🔄 Phase 1: Requesting signed URL from Cloud Function...');
-      
-      const signedUrlResponse = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}&fileSize=${zipBlob.size}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Filename': filename,
-          'X-File-Size': zipBlob.size.toString(),
-        },
-      });
+    // Phase 1: Get Signed URL
+    console.log('Phase 1: Requesting signed URL from Cloud Function...');
+    
+    const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
+    
+    const signedUrlResponse = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}&fileSize=${zipBlob.size}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Filename': filename,
+        'X-File-Size': zipBlob.size.toString(),
+      },
+    });
 
-      console.log('Cloud Function response status:', signedUrlResponse.status);
-      console.log('Cloud Function response headers:', Object.fromEntries(signedUrlResponse.headers));
-
-      if (!signedUrlResponse.ok) {
-        let errorData;
-        try {
-          errorData = await signedUrlResponse.json();
-        } catch {
-          errorData = { error: `HTTP ${signedUrlResponse.status}: ${signedUrlResponse.statusText}` };
-        }
-        
-        console.error('❌ Phase 1 failed - Cloud Function error:', errorData);
-        throw new Error(`Failed to get signed URL: ${errorData.error || signedUrlResponse.statusText}`);
+    if (!signedUrlResponse.ok) {
+      let errorData;
+      try {
+        errorData = await signedUrlResponse.json();
+      } catch {
+        errorData = { error: `HTTP ${signedUrlResponse.status}: ${signedUrlResponse.statusText}` };
       }
-
-      const signedUrlData = await signedUrlResponse.json();
-      console.log('✅ Phase 1 Complete: Signed URL received');
-      console.log('Signed URL expires at:', signedUrlData.expiresAt);
-      console.log('Upload will be performed by:', signedUrlData.uploadedBy);
-
-      const { signedUrl, uploadedBy } = signedUrlData;
-
-      // ================================
-      // PHASE 2: Direct Upload to GCS
-      // ================================
-      console.log('🔄 Phase 2: Uploading directly to Cloud Storage...');
-      console.log('Target bucket:', signedUrlData.bucket);
-      
-      const uploadStartTime = Date.now();
-      
-      const uploadResponse = await fetch(signedUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/zip',
-          // Only include the metadata headers that were signed in the URL
-          'x-goog-meta-uploaded-by': uploadedBy,
-          'x-goog-meta-uploaded-at': new Date().toISOString(),
-          'x-goog-meta-source': 'UGS-Ingest-Web-Application',
-        },
-        body: zipBlob,
-      });
-
-      const uploadDuration = ((Date.now() - uploadStartTime) / 1000).toFixed(1);
-      console.log('GCS upload response status:', uploadResponse.status);
-      console.log('GCS upload response headers:', Object.fromEntries(uploadResponse.headers));
-
-      if (!uploadResponse.ok) {
-        console.error('❌ Phase 2 failed - GCS upload error');
-        console.error('Response status:', uploadResponse.status);
-        console.error('Response text:', await uploadResponse.text().catch(() => 'Unable to read response'));
-        
-        throw new Error(`Upload to Cloud Storage failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
-      }
-
-      // ================================
-      // SUCCESS!
-      // ================================
-      console.log('✅ Phase 2 Complete: File uploaded to Cloud Storage');
-      console.log(`⏱️ Upload completed in ${uploadDuration} seconds`);
-      console.log(`📁 File location: gs://${signedUrlData.bucket}/${filename}`);
-      console.log(`📊 Upload speed: ${(zipBlob.size / 1024 / 1024 / parseFloat(uploadDuration)).toFixed(2)} MB/s`);
-      
-      return true;
-
-    } catch (error) {
-      console.error('❌ Upload process failed:', error);
-      
-      // Enhanced error logging for debugging
-      if (error instanceof Error) {
-        console.error('Error name:', error.name);
-        console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
-      }
-      
-      throw error;
+      throw new Error(`Failed to get signed URL: ${errorData.error || signedUrlResponse.statusText}`);
     }
-  };
+
+    const signedUrlData = await signedUrlResponse.json();
+    console.log('Phase 1 Complete: Signed URL received');
+
+    const { signedUrl, uploadedBy } = signedUrlData;
+
+    // Phase 2: Direct Upload to GCS (minimal headers)
+    console.log('Phase 2: Uploading directly to Cloud Storage...');
+    
+    const uploadStartTime = Date.now();
+    
+    const uploadResponse = await fetch(signedUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/zip',
+      },
+      body: zipBlob,
+    });
+
+    const uploadDuration = ((Date.now() - uploadStartTime) / 1000).toFixed(1);
+
+    if (!uploadResponse.ok) {
+      console.error('GCS upload error');
+      console.error('Response status:', uploadResponse.status);
+      throw new Error(`Upload to Cloud Storage failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+    }
+
+    console.log('Phase 2 Complete: File uploaded to Cloud Storage');
+
+    // Phase 3: Update file metadata
+    console.log('Phase 3: Adding metadata to uploaded file...');
+    
+    const metadata = {
+      'uploaded-by': uploadedBy,
+      'uploaded-at': new Date().toISOString(),
+      'source': 'UGS-Ingest-Web-Application',
+      'original-filename': filename,
+      'file-size-bytes': zipBlob.size.toString(),
+      'file-size-mb': fileSizeMB,
+      'upload-duration-seconds': uploadDuration
+    };
+
+    const metadataResponse = await fetch('/api/update-file-metadata', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        filename: filename,
+        metadata: metadata
+      })
+    });
+
+    if (metadataResponse.ok) {
+      console.log('Phase 3 Complete: Metadata added successfully');
+    } else {
+      console.warn('Phase 3 Warning: Failed to add metadata, but upload was successful');
+    }
+
+    // Success!
+    console.log(`Upload completed in ${uploadDuration} seconds`);
+    console.log(`File location: gs://${signedUrlData.bucket}/${filename}`);
+    console.log(`Upload speed: ${(zipBlob.size / 1024 / 1024 / parseFloat(uploadDuration)).toFixed(2)} MB/s`);
+    
+    return true;
+
+  } catch (error) {
+    console.error('Upload process failed:', error);
+    throw error;
+  }
+};
 
   // PostgREST and GDAL functions
   const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';

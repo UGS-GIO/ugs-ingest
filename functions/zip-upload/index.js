@@ -66,18 +66,8 @@ functions.http('ugs-zip-upload', async (req, res) => {
       version: 'v4',
       action: 'write',
       expires: Date.now() + 2 * 60 * 60 * 1000, // 2 hours from now
-      contentType: 'application/zip',
-      
-      // Add custom metadata that will be stored with the file
-      extensionHeaders: {
-        'x-goog-meta-uploaded-by': userEmail,
-        'x-goog-meta-uploaded-at': new Date().toISOString(),
-        'x-goog-meta-source': 'UGS-Ingest-Web-Application',
-        'x-goog-meta-file-size': fileSize || 'unknown',
-        'x-goog-meta-original-filename': '', // Will be set by frontend
-        'x-goog-meta-file-size-bytes': '', // Will be set by frontend
-        'x-goog-meta-file-size-mb': '' // Will be set by frontend
-      }
+      contentType: 'application/zip'
+      // Remove all extensionHeaders to avoid signature mismatches
     };
 
     console.log('Requesting signed URL with options:', {

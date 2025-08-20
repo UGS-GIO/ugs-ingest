@@ -219,6 +219,42 @@ app.post('/api/gdal-proxy/analyze-from-storage', async (req, res) => {
   }
 });
 
+app.post('/api/update-file-metadata', async (req, res) => {
+  try {
+    const { filename, metadata } = req.body;
+    
+    if (!filename) {
+      return res.status(400).json({ success: false, error: 'Filename is required' });
+    }
+
+    console.log(`📝 Updating metadata for file: ${filename}`);
+    
+    // Get the file from GCS
+    const bucket = gcsStorage.bucket('stagedzips');
+    const file = bucket.file(filename);
+    
+    // Update the file metadata
+    await file.setMetadata({
+      metadata: metadata
+    });
+    
+    console.log(`✅ Metadata updated for: ${filename}`);
+    
+    res.json({
+      success: true,
+      filename: filename,
+      message: 'Metadata updated successfully'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error updating file metadata:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update metadata: ' + error.message
+    });
+  }
+});
+
 // New endpoint: Clean up temporary analysis files
 app.post('/api/gdal-proxy/cleanup-temp-file', async (req, res) => {
   try {
