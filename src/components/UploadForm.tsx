@@ -1,4 +1,4 @@
-// components/UploadForm.tsx - Refactored Main Component
+// components/UploadForm.tsx - Complete Updated Version
 import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
@@ -425,6 +425,113 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+  // ==========================================
+  // UPDATED UPLOAD FUNCTION WITH SIGNED URLS
+  // ==========================================
+  const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
+    try {
+      const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
+      
+      const fileSizeMB = (zipBlob.size / 1024 / 1024).toFixed(2);
+      console.log('🔄 Starting two-phase upload process...');
+      console.log(`📦 File: ${filename}`);
+      console.log(`📏 Size: ${zipBlob.size} bytes (${fileSizeMB}MB)`);
+
+      // ================================
+      // PHASE 1: Get Signed URL
+      // ================================
+      console.log('🔄 Phase 1: Requesting signed URL from Cloud Function...');
+      
+      const signedUrlResponse = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}&fileSize=${zipBlob.size}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Filename': filename,
+          'X-File-Size': zipBlob.size.toString(),
+        },
+      });
+
+      console.log('Cloud Function response status:', signedUrlResponse.status);
+      console.log('Cloud Function response headers:', Object.fromEntries(signedUrlResponse.headers));
+
+      if (!signedUrlResponse.ok) {
+        let errorData;
+        try {
+          errorData = await signedUrlResponse.json();
+        } catch {
+          errorData = { error: `HTTP ${signedUrlResponse.status}: ${signedUrlResponse.statusText}` };
+        }
+        
+        console.error('❌ Phase 1 failed - Cloud Function error:', errorData);
+        throw new Error(`Failed to get signed URL: ${errorData.error || signedUrlResponse.statusText}`);
+      }
+
+      const signedUrlData = await signedUrlResponse.json();
+      console.log('✅ Phase 1 Complete: Signed URL received');
+      console.log('Signed URL expires at:', signedUrlData.expiresAt);
+      console.log('Upload will be performed by:', signedUrlData.uploadedBy);
+
+      const { signedUrl, uploadedBy } = signedUrlData;
+
+      // ================================
+      // PHASE 2: Direct Upload to GCS
+      // ================================
+      console.log('🔄 Phase 2: Uploading directly to Cloud Storage...');
+      console.log('Target bucket:', signedUrlData.bucket);
+      
+      const uploadStartTime = Date.now();
+      
+      const uploadResponse = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/zip',
+          // These metadata headers will be stored with the file
+          'x-goog-meta-uploaded-by': uploadedBy,
+          'x-goog-meta-uploaded-at': new Date().toISOString(),
+          'x-goog-meta-source': 'UGS-Ingest-Web-Application',
+          'x-goog-meta-original-filename': filename,
+          'x-goog-meta-file-size-bytes': zipBlob.size.toString(),
+          'x-goog-meta-file-size-mb': fileSizeMB,
+        },
+        body: zipBlob,
+      });
+
+      const uploadDuration = ((Date.now() - uploadStartTime) / 1000).toFixed(1);
+      console.log('GCS upload response status:', uploadResponse.status);
+      console.log('GCS upload response headers:', Object.fromEntries(uploadResponse.headers));
+
+      if (!uploadResponse.ok) {
+        console.error('❌ Phase 2 failed - GCS upload error');
+        console.error('Response status:', uploadResponse.status);
+        console.error('Response text:', await uploadResponse.text().catch(() => 'Unable to read response'));
+        
+        throw new Error(`Upload to Cloud Storage failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+      }
+
+      // ================================
+      // SUCCESS!
+      // ================================
+      console.log('✅ Phase 2 Complete: File uploaded to Cloud Storage');
+      console.log(`⏱️ Upload completed in ${uploadDuration} seconds`);
+      console.log(`📁 File location: gs://${signedUrlData.bucket}/${filename}`);
+      console.log(`📊 Upload speed: ${(zipBlob.size / 1024 / 1024 / parseFloat(uploadDuration)).toFixed(2)} MB/s`);
+      
+      return true;
+
+    } catch (error) {
+      console.error('❌ Upload process failed:', error);
+      
+      // Enhanced error logging for debugging
+      if (error instanceof Error) {
+        console.error('Error name:', error.name);
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+      }
+      
+      throw error;
+    }
+  };
+
   // PostgREST and GDAL functions
   const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
 
@@ -480,9 +587,10 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+  // ==========================================
+  // UPDATED GDAL ANALYSIS FUNCTIONS
+  // ==========================================
   const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
-    const GDAL_SERVICE_URL = '/api/gdal-proxy';
-    
     try {
       console.log('🔍 Using GDAL microservice to analyze geodatabase...');
       
@@ -503,110 +611,188 @@ export const UploadForm: React.FC = () => {
       }
       
       const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const tempFilename = `temp-analysis-${Date.now()}-${gdbFolderName}.zip`;
       
-      console.log('Step 1: Discovering layers in geodatabase...');
-      
-      const formData1 = new FormData();
-      formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
-      formData1.append('command', 'ogrinfo');
-      formData1.append('args', JSON.stringify(['-json', `/vsizip/${gdbFolderName}.zip/${gdbFolderName}`]));
-      
-      const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
-        method: 'POST',
-        body: formData1
-      });
-      
-      if (!response1.ok) {
-        throw new Error(`GDAL service returned ${response1.status}`);
-      }
-      
-      const result1 = await response1.json();
-      
-      if (!result1.success || !result1.stdout) {
-        console.error('Failed to list layers:', result1.stderr);
-        return { layers: [], columns: [], gdalResult: null };
-      }
-      
-      const layersWithFields: LayerInfo[] = [];
-      try {
-        const gdbInfo = JSON.parse(result1.stdout);
-        const layers = gdbInfo.layers || [];
-        
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        console.log(`Found ${layers.length} layers:`, layers.map((l: any) => l.name));
-        
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        for (const layer of layers) {
-          const layerFields = new Set<string>();
-          
-          const fields = layer.fields || [];
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          for (const field of fields) {
-            if (field.name) {
-              layerFields.add(field.name);
-            }
-          }
-          
-          const geometryFields = layer.geometryFields || [];
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          for (const geomField of geometryFields) {
-            if (geomField.name) {
-              layerFields.add(geomField.name);
-            }
-          }
-          
-          const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
-          for (const field of commonFields) {
-            if (!Array.from(layerFields).some(col => col.toUpperCase() === field.toUpperCase())) {
-              layerFields.add(field);
-            }
-          }
-          
-          layersWithFields.push({
-            name: layer.name,
-            fields: Array.from(layerFields),
-            featureCount: layer.featureCount || 'Unknown',
-            geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
-          });
-          
-          console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
-        }
+      console.log(`📦 Created analysis zip: ${tempFilename} (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB)`);
 
-        const gdalResult: GDALAnalysisResult = {
-          layers: layersWithFields,
-          gdbFolderName: gdbFolderName,
-          totalLayers: layersWithFields.length,
-          analysisTimestamp: new Date().toISOString()
-        };
-
-        if (layersWithFields.length === 1) {
-          console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
-          const resultWithSelection: GDALAnalysisResult = {
-            ...gdalResult,
-            selectedLayer: layersWithFields[0]
-          };
-          
-          return { 
-            layers: layersWithFields, 
-            columns: layersWithFields[0].fields,
-            gdalResult: resultWithSelection
-          };
-        }
-        
-        console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
-        return { 
-          layers: layersWithFields, 
-          columns: [],
-          gdalResult: gdalResult
-        };
-        
-      } catch (e) {
-        console.error('Failed to parse layer list JSON:', e);
-        return { layers: [], columns: [], gdalResult: null };
+      // Check if file is too large for direct upload
+      const MAX_DIRECT_SIZE = 50 * 1024 * 1024; // 50MB limit for direct uploads
+      
+      if (zipBlob.size > MAX_DIRECT_SIZE) {
+        console.log(`⚠️ File too large for direct upload (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB), using Cloud Storage staging...`);
+        return await analyzeGdbViaCloudStorage(zipBlob, tempFilename, gdbFolderName);
+      } else {
+        console.log(`✅ File size OK for direct upload (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB), using direct method...`);
+        return await analyzeGdbDirect(zipBlob, tempFilename, gdbFolderName);
       }
       
     } catch (error) {
       console.error('Error using GDAL microservice:', error);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+  };
+
+  // Direct analysis for smaller files
+  const analyzeGdbDirect = async (zipBlob: Blob, tempFilename: string, gdbFolderName: string): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
+    console.log('Step 1: Discovering layers in geodatabase (direct upload)...');
+    
+    const formData = new FormData();
+    formData.append('file', new File([zipBlob], tempFilename));
+    formData.append('command', 'ogrinfo');
+    formData.append('args', JSON.stringify(['-json', `/vsizip/${tempFilename}/${gdbFolderName}`]));
+    
+    const response = await fetch('/api/gdal-proxy/upload-and-execute', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      throw new Error(`GDAL service returned ${response.status}`);
+    }
+    
+    const result = await response.json();
+    return processGdalResult(result, gdbFolderName);
+  };
+
+  // Cloud Storage analysis for larger files
+  const analyzeGdbViaCloudStorage = async (zipBlob: Blob, tempFilename: string, gdbFolderName: string): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
+    try {
+      console.log('🔄 Using Cloud Storage staging for large geodatabase analysis...');
+      
+      // Step 1: Upload to Cloud Storage using signed URLs
+      console.log('Step 1: Uploading to Cloud Storage for analysis...');
+      const uploaded = await uploadZipToGCS(zipBlob, tempFilename);
+      
+      if (!uploaded) {
+        throw new Error('Failed to upload file to Cloud Storage for analysis');
+      }
+      
+      // Step 2: Tell GDAL service to analyze from Cloud Storage
+      console.log('Step 2: Requesting GDAL analysis from Cloud Storage...');
+      const analysisResponse = await fetch('/api/gdal-proxy/analyze-from-storage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          bucket: 'stagedzips',
+          filename: tempFilename,
+          gdbFolderName: gdbFolderName,
+          command: 'ogrinfo',
+          args: ['-json', `/vsizip/${tempFilename}/${gdbFolderName}`]
+        })
+      });
+      
+      if (!analysisResponse.ok) {
+        throw new Error(`GDAL analysis failed: ${analysisResponse.status}`);
+      }
+      
+      const result = await analysisResponse.json();
+      
+      // Step 3: Clean up temporary file
+      console.log('Step 3: Cleaning up temporary analysis file...');
+      try {
+        await fetch('/api/gdal-proxy/cleanup-temp-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bucket: 'stagedzips', filename: tempFilename })
+        });
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temp file:', cleanupError);
+      }
+      
+      return processGdalResult(result, gdbFolderName);
+      
+    } catch (error) {
+      console.error('Error in Cloud Storage analysis workflow:', error);
+      throw error;
+    }
+  };
+
+  // Shared result processing
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const processGdalResult = (result: any, gdbFolderName: string): { layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null } => {
+    if (!result.success || !result.stdout) {
+      console.error('Failed to list layers:', result.stderr);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+    const layersWithFields: LayerInfo[] = [];
+    
+    try {
+      const gdbInfo = JSON.parse(result.stdout);
+      const layers = gdbInfo.layers || [];
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      console.log(`Found ${layers.length} layers:`, layers.map((l: any) => l.name));
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const layer of layers) {
+        const layerFields = new Set<string>();
+        
+        const fields = layer.fields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const field of fields) {
+          if (field.name) {
+            layerFields.add(field.name);
+          }
+        }
+        
+        const geometryFields = layer.geometryFields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const geomField of geometryFields) {
+          if (geomField.name) {
+            layerFields.add(geomField.name);
+          }
+        }
+        
+        const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
+        for (const field of commonFields) {
+          if (!Array.from(layerFields).some(col => col.toUpperCase() === field.toUpperCase())) {
+            layerFields.add(field);
+          }
+        }
+        
+        layersWithFields.push({
+          name: layer.name,
+          fields: Array.from(layerFields),
+          featureCount: layer.featureCount || 'Unknown',
+          geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
+        });
+        
+        console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
+      }
+
+      const gdalResult: GDALAnalysisResult = {
+        layers: layersWithFields,
+        gdbFolderName: gdbFolderName,
+        totalLayers: layersWithFields.length,
+        analysisTimestamp: new Date().toISOString()
+      };
+
+      if (layersWithFields.length === 1) {
+        console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
+        const resultWithSelection: GDALAnalysisResult = {
+          ...gdalResult,
+          selectedLayer: layersWithFields[0]
+        };
+        
+        return { 
+          layers: layersWithFields, 
+          columns: layersWithFields[0].fields,
+          gdalResult: resultWithSelection
+        };
+      }
+      
+      console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
+      return { 
+        layers: layersWithFields, 
+        columns: [],
+        gdalResult: gdalResult
+      };
+      
+    } catch (e) {
+      console.error('Failed to parse layer list JSON:', e);
       return { layers: [], columns: [], gdalResult: null };
     }
   };
@@ -962,7 +1148,7 @@ export const UploadForm: React.FC = () => {
         file.name.includes('.gdb/') || file.name.endsWith('.gdb')
       ),
       userAgent: navigator.userAgent,
-      uploadSource: 'UGS Ingest Web Application v2.0 (Enhanced Schema Validation)',
+      uploadSource: 'UGS Ingest Web Application v2.0 (Enhanced Schema Validation with Signed URLs)',
     };
   };
 
@@ -985,89 +1171,6 @@ export const UploadForm: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  //New upload function with tracking
-  const uploadZipToGCS = async (
-    zipBlob: Blob, 
-    filename: string,
-    onProgress?: (progress: number) => void
-  ): Promise<boolean> => {
-    try {
-      const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
-      
-      console.log('🔄 Starting upload with progress tracking...');
-
-      // Phase 1: Get signed URL (same as above)
-      const signedUrlResponse = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}&fileSize=${zipBlob.size}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Filename': filename,
-          'X-File-Size': zipBlob.size.toString(),
-        },
-      });
-
-      if (!signedUrlResponse.ok) {
-        const errorData = await signedUrlResponse.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(`Failed to get signed URL: ${errorData.error}`);
-      }
-
-      const { signedUrl, uploadedBy } = await signedUrlResponse.json();
-
-      // Phase 2: Upload with XMLHttpRequest for progress tracking
-      return new Promise<boolean>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        
-        // Track upload progress
-        xhr.upload.addEventListener('progress', (event) => {
-          if (event.lengthComputable && onProgress) {
-            const progress = (event.loaded / event.total) * 100;
-            onProgress(progress);
-            console.log(`📊 Upload progress: ${progress.toFixed(1)}% (${(event.loaded / 1024 / 1024).toFixed(1)}MB / ${(event.total / 1024 / 1024).toFixed(1)}MB)`);
-          }
-        });
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            console.log('✅ Upload with progress completed successfully');
-            resolve(true);
-          } else {
-            console.error('❌ Upload failed:', xhr.status, xhr.statusText);
-            reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
-          }
-        });
-
-        xhr.addEventListener('error', (event) => {
-          console.error('❌ Upload network error:', event);
-          reject(new Error('Upload failed due to network error'));
-        });
-
-        xhr.addEventListener('timeout', () => {
-          console.error('❌ Upload timeout');
-          reject(new Error('Upload timed out'));
-        });
-
-        // Configure the request
-        xhr.open('PUT', signedUrl);
-        xhr.setRequestHeader('Content-Type', 'application/zip');
-        xhr.setRequestHeader('x-goog-meta-uploaded-by', uploadedBy);
-        xhr.setRequestHeader('x-goog-meta-uploaded-at', new Date().toISOString());
-        xhr.setRequestHeader('x-goog-meta-source', 'UGS-Ingest-Web-Application');
-        
-        // Set timeout for large files (30 minutes)
-        xhr.timeout = 30 * 60 * 1000;
-        
-        // Start the upload
-        xhr.send(zipBlob);
-      });
-
-    } catch (error) {
-      console.error('❌ Upload with progress failed:', error);
-      throw error;
-    }
-  };
-
-  
-
   const createZipFile = async (): Promise<Blob> => {
     const JSZip = (await import('jszip')).default;
     
@@ -1089,9 +1192,6 @@ export const UploadForm: React.FC = () => {
       }
     });
   };
-
-
-  // Update your handleSubmit function to use better progress messages
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -1132,7 +1232,7 @@ export const UploadForm: React.FC = () => {
       // Step 4: Success message
       setUploadMessage(`✅ Upload successful! File "${generatedFilename}" (${fileSizeMB}MB) has been uploaded to cloud storage.`);
       
-      // Reset form (keep your existing reset logic)
+      // Reset form
       setFormData({
         projectName: '',
         datasetName: '',
@@ -1366,8 +1466,8 @@ export const UploadForm: React.FC = () => {
 
         <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
           <p className="text-xs text-blue-700">
-            <strong>Enhanced Schema Validation:</strong> The application now supports separated schema validation and upload workflows! 
-            Complete field mapping validation before uploading to ensure data integrity and proper schema compliance.
+            <strong>Enhanced Upload System:</strong> This application now supports unlimited file sizes using Cloud Storage signed URLs! 
+            Large geodatabases are automatically handled through Cloud Storage staging for both schema validation and final upload.
           </p>
         </div>
 
