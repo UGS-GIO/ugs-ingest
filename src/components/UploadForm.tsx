@@ -1,4 +1,4 @@
-// components/UploadForm.tsx - Complete Updated Version
+//Updated PostgREST URL Logic
 import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
@@ -79,6 +79,25 @@ export const UploadForm: React.FC = () => {
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [generatedFilename, setGeneratedFilename] = useState<string>('');
   const [isProcessingFolders, setIsProcessingFolders] = useState<boolean>(false);
+
+  // ==========================================
+  // NEW: Domain-specific PostgREST URL logic
+  // ==========================================
+  
+  /**
+   * Get the appropriate PostgREST URL based on the domain
+   * @param domain - The domain value from the form
+   * @returns The PostgREST URL to use for this domain
+   */
+  const getPostgrestUrl = (domain: string): string => {
+    // Groundwater domain uses a different PostgREST service
+    if (domain === 'groundwater') {
+      return 'https://ugs-koop-umfdxaxiyq-wm.a.run.app';
+    }
+    
+    // All other domains use the default PostgREST service
+    return 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
+  };
 
   // Update author name when email is loaded
   useEffect(() => {
@@ -530,13 +549,19 @@ export const UploadForm: React.FC = () => {
   }
 };
 
-  // PostgREST and GDAL functions
-  const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
-
+  // ==========================================
+  // UPDATED PostgREST and GDAL functions
+  // ==========================================
+  
   const fetchAvailableTables = async (schemaName?: string): Promise<TableInfo[]> => {
     try {
       const schema = schemaName || 'mapping';
+      
+      // Get the appropriate PostgREST URL based on the current domain
+      const POSTGREST_URL = getPostgrestUrl(formData.domain);
+      
       console.log(`🔍 Discovering tables in schema: ${schema}`);
+      console.log(`🌐 Using PostgREST URL: ${POSTGREST_URL}`);
 
       const headers: Record<string, string> = {
         'Accept-Profile': schema
@@ -926,6 +951,12 @@ export const UploadForm: React.FC = () => {
 
   const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
     try {
+      // Get the appropriate PostgREST URL based on the current domain
+      const POSTGREST_URL = getPostgrestUrl(formData.domain);
+      
+      console.log(`🔍 Fetching schema for ${schema}.${tableName}`);
+      console.log(`🌐 Using PostgREST URL: ${POSTGREST_URL}`);
+
       const headers: Record<string, string> = {
         'Accept-Profile': schema
       };
@@ -1140,13 +1171,14 @@ export const UploadForm: React.FC = () => {
         columnMapping: columnMapping,
         validationCompleted: schemaValidationState === 'completed',
         gdalAnalysis: gdalAnalysisResult,
-        mappingTimestamp: new Date().toISOString()
+        mappingTimestamp: new Date().toISOString(),
+        postgreRestUrl: getPostgrestUrl(formData.domain) // Include which URL was used
       } : null,
       containsGeodatabase: formData.selectedFiles.some(file => 
         file.name.includes('.gdb/') || file.name.endsWith('.gdb')
       ),
       userAgent: navigator.userAgent,
-      uploadSource: 'UGS Ingest Web Application v2.0 (Enhanced Schema Validation with Signed URLs)',
+      uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Schema Validation with Domain-Specific PostgREST URLs)',
     };
   };
 
@@ -1389,6 +1421,20 @@ export const UploadForm: React.FC = () => {
         </div>
       </div>
 
+      {/* Domain-specific PostgREST URL indicator */}
+      {formData.domain && (
+        <div className="mb-6 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <p className="text-xs text-gray-700">
+            <strong>PostgREST Service:</strong> {getPostgrestUrl(formData.domain)}
+            {formData.domain === 'groundwater' && (
+              <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">
+                Using Groundwater-specific service
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
       {/* Schema Validation Status */}
       <SchemaValidationStatus
         loadType={formData.loadType}
@@ -1466,13 +1512,14 @@ export const UploadForm: React.FC = () => {
           <p className="text-xs text-blue-700">
             <strong>Enhanced Upload System:</strong> This application now supports unlimited file sizes using Cloud Storage signed URLs! 
             Large geodatabases are automatically handled through Cloud Storage staging for both schema validation and final upload.
+            The system automatically selects the appropriate PostgREST service based on your chosen domain.
           </p>
         </div>
 
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
           <p className="text-xs text-gray-600">
             <strong>Audit Trail:</strong> All uploads are logged with user identification, timestamp, 
-            file details, and schema validation results. A metadata.json file will be included in the zip with complete audit information.
+            file details, schema validation results, and PostgREST service information. A metadata.json file will be included in the zip with complete audit information.
           </p>
         </div>
       </form> 
