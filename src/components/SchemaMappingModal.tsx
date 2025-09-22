@@ -1,6 +1,9 @@
 // components/SchemaMappingModal.tsx
+// NOTE: This component is now focused on single-layer mapping
+// For multi-layer geodatabases, use LayerSelectionModal instead
+
 import React from 'react';
-import type { TableInfo, ColumnInfo } from '../types/uploadTypes';
+import type { TableInfo, ColumnInfo, LayerMapping } from '../types/uploadTypes';
 
 interface SchemaMappingModalProps {
   isOpen: boolean;
@@ -9,7 +12,7 @@ interface SchemaMappingModalProps {
   selectedTable: string;
   availableTables: TableInfo[];
   targetColumns: ColumnInfo[];
-  columnMapping: {[key: string]: string};
+  columnMapping: Record<string, string>;
   onTableSelect: (tableFullName: string) => void;
   onColumnMap: (sourceCol: string, targetCol: string) => void;
   onComplete: () => void;
@@ -47,10 +50,21 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
               📊 Source Layer: {selectedSourceLayer}
             </p>
             <p className="text-blue-700 text-sm">
-              Mapping {sourceColumns.length} columns from the selected geodatabase layer to target table schema.
+              Mapping {sourceColumns.length} columns from the selected layer to target table schema.
             </p>
           </div>
         )}
+
+        {/* Multi-layer notice */}
+        <div className="mb-6 p-3 bg-amber-50 border border-amber-200 rounded-md">
+          <p className="text-amber-800 font-semibold mb-1">
+            💡 Multi-Layer Support Available
+          </p>
+          <p className="text-amber-700 text-sm">
+            This interface handles single-layer mapping. For geodatabases with multiple layers, 
+            use the enhanced layer selection interface that allows bulk processing of all layers.
+          </p>
+        </div>
 
         {/* Table Selection */}
         <div className="mb-6">
@@ -78,7 +92,7 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
               {/* Source Columns */}
               <div>
                 <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                  Your File Columns ({sourceColumns.length})
+                  Source Columns ({sourceColumns.length})
                   {selectedSourceLayer && (
                     <span className="text-sm text-gray-600 ml-2">from {selectedSourceLayer}</span>
                   )}
@@ -119,6 +133,9 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
                         {!column.isNullable && (
                           <span className="text-xs text-red-500 ml-2">Required</span>
                         )}
+                        {column.isGeometry && (
+                          <span className="text-xs text-blue-500 ml-2">Geometry</span>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -129,9 +146,9 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
             {/* Manual Mapping Interface */}
             <div className="mb-6">
               <h3 className="text-lg font-semibold text-gray-800 mb-3">Column Mapping</h3>
-              {sourceColumns.map(sourceCol => (
-                <div key={sourceCol} className="mb-3 p-3 border border-gray-200 rounded-md">
-                  <div className="flex items-center gap-4">
+              <div className="space-y-3">
+                {sourceColumns.map(sourceCol => (
+                  <div key={sourceCol} className="flex items-center gap-4 p-3 border border-gray-200 rounded-md">
                     <div className="flex-1">
                       <span className="font-medium text-gray-800">{sourceCol}</span>
                     </div>
@@ -140,19 +157,20 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
                       <select
                         value={columnMapping[sourceCol] || ''}
                         onChange={(e) => onColumnMap(sourceCol, e.target.value)}
-                        className="w-full px-3 py-1 border border-gray-300 rounded-md text-sm"
+                        className="w-full px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         <option value="">Select target column...</option>
                         {targetColumns.map(targetCol => (
                           <option key={targetCol.name} value={targetCol.name}>
                             {targetCol.name} ({targetCol.dataType})
+                            {!targetCol.isNullable && ' *'}
                           </option>
                         ))}
                       </select>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             {/* Validation Status */}
@@ -175,7 +193,7 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
                     ✅ All columns mapped successfully!
                   </p>
                   <p className="text-green-600 text-sm mt-1">
-                    Schema validation is complete. You can now close this dialog and proceed with upload.
+                    Schema validation is complete. You can now proceed with the upload.
                   </p>
                 </div>
               )}
@@ -203,4 +221,25 @@ export const SchemaMappingModal: React.FC<SchemaMappingModalProps> = ({
       </div>
     </div>
   );
+};
+
+// Helper function to convert single-layer mapping to LayerMapping format
+export const convertToLayerMapping = (
+  sourceLayer: string,
+  targetTable: string,
+  sourceColumns: string[],
+  columnMapping: Record<string, string>,
+  geometryType: string = 'Unknown',
+  featureCount: number = 0
+): LayerMapping => {
+  return {
+    sourceLayer,
+    targetTable,
+    enabled: true,
+    columnMapping,
+    sourceColumns,
+    geometryType,
+    featureCount,
+    processingStatus: 'pending'
+  };
 };
