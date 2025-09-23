@@ -1,93 +1,116 @@
-// types/uploadTypes.ts - Enhanced types for multi-layer geodatabase processing
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// types/uploadTypes.ts - Enhanced with Multi-Layer Support
+import type { ChangeEvent } from 'react';
 
-// Schema validation state enum - includes all possible states
-export type SchemaValidationState = 
-  | 'not_started'
-  | 'validating' 
-  | 'layer_selection'
-  | 'pending' 
-  | 'analyzing' 
-  | 'mapping' 
-  | 'completed';
-
-export interface LayerInfo {
+// Type definitions for File System Access API
+export interface FileSystemHandle {
+  kind: 'file' | 'directory';
   name: string;
-  fields: string[];
-  featureCount: number;
-  geometryType: string;
 }
 
+export interface FileSystemFileHandle extends FileSystemHandle {
+  kind: 'file';
+  getFile(): Promise<File>;
+}
+
+export interface FileSystemDirectoryHandle extends FileSystemHandle {
+  kind: 'directory';
+  entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+}
+
+// Legacy File System Entry API types (simplified to avoid inheritance issues)
+// Using any types here since these are legacy browser APIs with inconsistent typing
+export interface FileSystemEntry {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+  fullPath: string;
+}
+
+// Note: We use 'any' for the actual entry objects since the WebKit File System API
+// has inconsistent typing across browsers. Runtime checks ensure safety.
+export type FileSystemFileEntry = any;
+export type FileSystemDirectoryEntry = any;
+export type FileSystemDirectoryReader = any;
+
+// Types for schema validation
 export interface TableInfo {
+  schema: string;
+  name: string;
   fullName: string;
   displayName: string;
-  schema: string;
-  tableName: string;
 }
 
 export interface ColumnInfo {
   name: string;
   dataType: string;
   isNullable: boolean;
-  isPrimaryKey?: boolean;
-  isGeometry?: boolean;
+  defaultValue: string | null;
+  position: number;
 }
 
-// Enhanced metadata structure for multi-layer geodatabase processing
-export interface MultiLayerSchemaValidation {
-  validationState: 'pending' | 'analyzing' | 'mapping' | 'completed';
+// Layer information interface
+export interface LayerInfo {
+  name: string;
+  fields: string[];
+  featureCount: string | number;
+  geometryType: string;
+}
+
+// GDAL Analysis Result interface for metadata preservation
+export interface GDALAnalysisResult {
+  layers: LayerInfo[];
+  selectedLayer?: LayerInfo;
+  gdbFolderName?: string;
+  totalLayers: number;
+  analysisTimestamp: string;
+}
+
+// NEW: Multi-layer table mapping interfaces
+export interface LayerTableMapping {
+  sourceLayer: string;
+  layerFields: string[];
+  targetTable: string;
+  columnMapping: { [key: string]: string };
+  isComplete: boolean;
+  enabled: boolean;
+}
+
+export interface MultiLayerValidation {
+  selectedLayers: LayerTableMapping[];
+  gdalAnalysis: GDALAnalysisResult | null;
+  availableTables: TableInfo[];
   validationCompleted: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  gdalAnalysis: any; // Your existing GDAL analysis result
-  mappingTimestamp: string;
-  
-  // NEW: Support multiple layer mappings
-  selectedLayers: LayerMapping[];
-  
-  // SUMMARY: Add summary info for easy access
-  totalLayersSelected: number;
-  totalLayersAvailable: number;
-  targetTables: string[];
+  validationTimestamp: string;
 }
 
-export interface LayerMapping {
-  sourceLayer: string;           // e.g., "Quaternary_Faults"
-  targetTable: string;          // e.g., "hazards_quaternary_faults" 
-  enabled: boolean;             // Allow users to enable/disable layers
-  columnMapping: Record<string, string>; // Source col -> Target col
-  sourceColumns: string[];      // Available source columns
-  geometryType: string;         // Point, LineString, Polygon, etc.
-  featureCount: number;         // Number of features in this layer
-  processingStatus?: 'pending' | 'processing' | 'completed' | 'failed';
-  errorMessage?: string;        // If processing failed
-}
-
-// Upload form data structure
-export interface UploadFormData {
+export interface FormData {
+  // Original fields
   projectName: string;
   datasetName: string;
   authorName: string;
   publicationType: string;
   description: string;
-  domain: string;
-  customDomain?: string;
-  dataTopic: string;
-  scale?: string;
-  quadName?: string;
-  pubId?: string;
-  loadType: 'full' | 'update';
   selectedFiles: File[];
+  
+  // New fields for zip naming convention
+  domain: string;
+  customDomain: string;
+  dataTopic: string;
+  scale: string;
+  quadName: string;
+  pubId: string;
+  loadType: string;
 }
 
-// Form data type alias for backward compatibility
-export type FormData = UploadFormData;
-
-// Form validation errors
+// Define the shape of our errors
 export interface FormErrors {
   projectName?: string;
   datasetName?: string;
   authorName?: string;
   publicationType?: string;
   description?: string;
+  selectedFiles?: string;
   domain?: string;
   customDomain?: string;
   dataTopic?: string;
@@ -95,28 +118,88 @@ export interface FormErrors {
   quadName?: string;
   pubId?: string;
   loadType?: string;
-  selectedFiles?: string;
 }
 
-// Handle change function type for form inputs
-export type HandleChangeType = (field: keyof UploadFormData) => (value: string | File[]) => void;
+// Enhanced schema validation states for multi-layer support
+export type SchemaValidationState = 
+  | 'not_started' 
+  | 'validating' 
+  | 'layer_selection' 
+  | 'table_mapping'      // NEW: Multi-table mapping phase
+  | 'column_mapping'     // NEW: Column mapping for each table
+  | 'completed';
 
-// Publication type options
-export interface PublicationTypeOption {
-  value: string;
-  label: string;
-}
-
-export const publicationTypeOptions: PublicationTypeOption[] = [
+// Options for dropdowns
+export const publicationTypeOptions = [
+  { value: '', label: 'Select Publication Type' },
+  { value: 'Special Study', label: 'Special Study' },
   { value: 'Digital Map', label: 'Digital Map' },
-  { value: 'Report', label: 'Report' },
-  { value: 'Publication', label: 'Publication' },
-  { value: 'Dataset', label: 'Dataset' },
-  { value: 'Other', label: 'Other' }
+  { value: 'Open File', label: 'Open File Report' },
+  { value: 'report', label: 'Technical Report' },
+  { value: 'dataset', label: 'Dataset' },
+  { value: 'other', label: 'Other' },
 ];
 
-// Enhanced metadata structure
-export interface EnhancedUploadMetadata {
+export const domainOptions = [
+  { value: '', label: 'Select Domain' },
+  { value: 'hazards', label: 'Hazards', schema: 'hazards' },
+  { value: 'groundwater', label: 'Groundwater', schema: 'gwportal' },
+  { value: 'wetlands', label: 'Wetlands', schema: 'wetlands' },
+  { value: 'geologic_maps', label: 'Geologic Maps', schema: 'mapping' },
+  { value: 'energy_minerals', label: 'Energy & Minerals', schema: 'emp' },
+  { value: 'ccus', label: 'CCUS', schema: 'ccus' },
+  { value: 'boreholes', label: 'Boreholes', schema: 'boreholes' },
+  { value: 'geochron', label: 'Geochronology', schema: 'geochron' },
+  { value: 'custom', label: 'Other (specify)' },
+];
+
+export const loadTypeOptions = [
+  { value: '', label: 'Select Load Type' },
+  { value: 'full', label: 'Full' },
+  { value: 'update', label: 'Update' },
+  { value: 'append', label: 'Append' },
+  { value: 'incremental', label: 'Incremental' },
+];
+
+// Helper function to get schema from domain
+export const getSchemaFromDomain = (domain: string): string => {
+  const domainOption = domainOptions.find(option => option.value === domain);
+  return domainOption?.schema || 'mapping'; // Default to mapping schema
+};
+
+// Helper functions for multi-layer validation
+export const isMultiLayerValidationComplete = (mappings: LayerTableMapping[]): boolean => {
+  return mappings
+    .filter(mapping => mapping.enabled)
+    .every(mapping => 
+      mapping.targetTable && 
+      mapping.isComplete &&
+      Object.keys(mapping.columnMapping).length === mapping.layerFields.length
+    );
+};
+
+export const getEnabledLayerCount = (mappings: LayerTableMapping[]): number => {
+  return mappings.filter(mapping => mapping.enabled).length;
+};
+
+export const getCompletedMappingCount = (mappings: LayerTableMapping[]): number => {
+  return mappings.filter(mapping => mapping.enabled && mapping.isComplete).length;
+};
+
+export const createDefaultLayerMapping = (layer: LayerInfo): LayerTableMapping => {
+  return {
+    sourceLayer: layer.name,
+    layerFields: layer.fields,
+    targetTable: '',
+    columnMapping: {},
+    isComplete: false,
+    enabled: true,
+  };
+};
+
+// Enhanced metadata structure for multi-layer processing
+export interface EnhancedMetadata {
+  // Original metadata fields
   projectName: string;
   datasetName: string;
   authorName: string;
@@ -130,6 +213,8 @@ export interface EnhancedUploadMetadata {
   loadType: string;
   submittedBy: string;
   submittedAt: string;
+  
+  // File information
   originalFiles: Array<{
     name: string;
     size: number;
@@ -139,69 +224,78 @@ export interface EnhancedUploadMetadata {
   totalFileCount: number;
   totalFileSize: number;
   zipFilename: string;
-  schemaValidation?: MultiLayerSchemaValidation;
+  
+  // Multi-layer schema validation (enhanced)
+  schemaValidation?: {
+    validationState: SchemaValidationState;
+    isMultiLayer: boolean;
+    selectedLayers: LayerTableMapping[];
+    gdalAnalysis: GDALAnalysisResult | null;
+    validationCompleted: boolean;
+    mappingTimestamp: string;
+    postgreRestUrl: string;
+    
+    // Legacy fields for backward compatibility
+    targetTable?: string;
+    sourceLayer?: string;
+    sourceColumns?: string[];
+    columnMapping?: { [key: string]: string };
+    currentLayer?: LayerTableMapping;
+  };
+  
+  // System information
   containsGeodatabase: boolean;
   userAgent: string;
   uploadSource: string;
 }
 
-// Utility functions
-export const generateTargetTableName = (layerName: string, domain: string = 'hazards'): string => {
-  const sanitized = layerName.toLowerCase()
-    .replace(/[^a-z0-9]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '');
+// Event handler types
+export type HandleChangeType = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => void;
+
+// Validation helper functions
+export const validateLayerMapping = (mapping: LayerTableMapping): string[] => {
+  const errors: string[] = [];
   
-  return `${domain}_${sanitized}`;
+  if (!mapping.targetTable) {
+    errors.push('Target table is required');
+  }
+  
+  const unmappedColumns = mapping.layerFields.filter(field => !mapping.columnMapping[field]);
+  if (unmappedColumns.length > 0) {
+    errors.push(`Unmapped columns: ${unmappedColumns.join(', ')}`);
+  }
+  
+  return errors;
 };
 
-export const generateEnhancedMetadata = (
-  formData: UploadFormData, 
-  layerMappings: LayerMapping[],
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  gdalAnalysisResult: any,
-  email: string,
-  generatedFilename: string
-): EnhancedUploadMetadata => {
-  const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+export const validateAllLayerMappings = (mappings: LayerTableMapping[]): { [layerName: string]: string[] } => {
+  const validationResults: { [layerName: string]: string[] } = {};
   
-  return {
-    projectName: formData.projectName,
-    datasetName: formData.datasetName,
-    authorName: formData.authorName,
-    publicationType: formData.publicationType,
-    description: formData.description,
-    domain: effectiveDomain || 'unknown',
-    dataTopic: formData.dataTopic,
-    scale: formData.scale || undefined,
-    quadName: formData.quadName || undefined,
-    pubId: formData.pubId || undefined,
-    loadType: formData.loadType,
-    submittedBy: email,
-    submittedAt: new Date().toISOString(),
-    originalFiles: formData.selectedFiles.map(file => ({
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      lastModified: file.lastModified
-    })),
-    totalFileCount: formData.selectedFiles.length,
-    totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
-    zipFilename: generatedFilename,
-    schemaValidation: formData.loadType !== 'full' ? {
-      validationState: 'completed',
-      validationCompleted: true,
-      gdalAnalysis: gdalAnalysisResult,
-      mappingTimestamp: new Date().toISOString(),
-      selectedLayers: layerMappings,
-      totalLayersSelected: layerMappings.length,
-      totalLayersAvailable: gdalAnalysisResult?.layers?.length || 0,
-      targetTables: layerMappings.map(l => l.targetTable),
-    } : undefined,
-    containsGeodatabase: formData.selectedFiles.some(file => 
-      file.name.includes('.gdb/') || file.name.endsWith('.gdb')
-    ),
-    userAgent: navigator.userAgent,
-    uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Multi-Layer Processing)',
-  };
+  mappings
+    .filter(mapping => mapping.enabled)
+    .forEach(mapping => {
+      const errors = validateLayerMapping(mapping);
+      if (errors.length > 0) {
+        validationResults[mapping.sourceLayer] = errors;
+      }
+    });
+  
+  return validationResults;
+};
+
+// Table name generation helper for multi-layer
+export const generateTableName = (formData: FormData, layerName: string): string => {
+  const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+  const sanitizedLayerName = layerName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  
+  const parts = [
+    effectiveDomain,
+    formData.dataTopic,
+    sanitizedLayerName, // Include layer name for uniqueness
+    formData.scale,
+    formData.quadName,
+    formData.pubId,
+  ].filter(part => part && part.trim() !== '');
+  
+  return parts.join('_');
 };
