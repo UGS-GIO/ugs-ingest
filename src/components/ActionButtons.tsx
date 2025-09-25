@@ -27,13 +27,14 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
   onSchemaValidation,
   onSubmit,
 }) => {
-  const isSchemaValidationRequired = loadType !== 'full' && loadType !== '';
+  // Schema validation is only required for "update" load type
+  const isSchemaValidationRequired = loadType === 'update';
   const isSchemaValidationDisabled = isValidatingSchema || selectedFilesCount === 0 || !domain || !loadType;
   const isUploadDisabled = isSubmitting || isProcessingFolders || (isSchemaValidationRequired && schemaValidationState !== 'completed');
 
   return (
     <div className="flex flex-col gap-4 mt-8">
-      {/* Schema Validation Button - Only show for non-full load types */}
+      {/* Schema Validation Button - Only show for "update" load type */}
       {isSchemaValidationRequired && (
         <div className="flex items-center justify-between">
           <button

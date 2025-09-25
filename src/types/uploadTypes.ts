@@ -67,15 +67,12 @@ export interface GDALAnalysisResult {
 }
 
 export interface FormData {
-  // Original fields
   projectName: string;
   datasetName: string;
   authorName: string;
   publicationType: string;
   description: string;
   selectedFiles: File[];
-  
-  // New fields for zip naming convention
   domain: string;
   customDomain: string;
   dataTopic: string;
@@ -84,6 +81,7 @@ export interface FormData {
   pubId: string;
   loadType: string;
 }
+
 
 // Define the shape of our errors
 export interface FormErrors {
@@ -101,7 +99,6 @@ export interface FormErrors {
   pubId?: string;
   loadType?: string;
 }
-
 export type SchemaValidationState = 'not_started' | 'validating' | 'layer_selection' | 'mapping' | 'completed';
 
 // Options for dropdowns
@@ -128,12 +125,11 @@ export const domainOptions = [
   { value: 'custom', label: 'Other (specify)' },
 ];
 
+// Updated loadTypeOptions - only "new_table" and "update"
 export const loadTypeOptions = [
   { value: '', label: 'Select Load Type' },
-  { value: 'full', label: 'Full' },
+  { value: 'new_table', label: 'New Table' },
   { value: 'update', label: 'Update' },
-  { value: 'append', label: 'Append' },
-  { value: 'incremental', label: 'Incremental' },
 ];
 
 // Helper function to get schema from domain

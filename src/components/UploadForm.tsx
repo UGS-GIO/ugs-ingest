@@ -1121,14 +1121,15 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  const isColumnMappingComplete = (): boolean => {
-    if (formData.loadType === 'full') return true;
-    if (schemaValidationState !== 'mapping' && schemaValidationState !== 'completed') return false;
-    if (sourceColumns.length === 0) return false;
-    if (!selectedTable) return false;
-    
-    return sourceColumns.every(col => columnMapping[col]);
-  };
+const isColumnMappingComplete = (): boolean => {
+  // Changed from 'full' to 'new_table'
+  if (formData.loadType === 'new_table') return true;
+  if (schemaValidationState !== 'mapping' && schemaValidationState !== 'completed') return false;
+  if (sourceColumns.length === 0) return false;
+  if (!selectedTable) return false;
+  
+  return sourceColumns.every(col => columnMapping[col]);
+};
 
   useEffect(() => {
     if (schemaValidationState === 'mapping' && isColumnMappingComplete()) {
@@ -1137,50 +1138,51 @@ export const UploadForm: React.FC = () => {
     }
   }, [columnMapping, sourceColumns, selectedTable, schemaValidationState]);
 
-  const generateMetadata = () => {
-    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
-    
-    return {
-      projectName: formData.projectName,
-      datasetName: formData.datasetName,
-      authorName: formData.authorName,
-      publicationType: formData.publicationType,
-      description: formData.description,
-      domain: effectiveDomain,
-      dataTopic: formData.dataTopic,
-      scale: formData.scale || null,
-      quadName: formData.quadName || null,
-      pubId: formData.pubId || null,
-      loadType: formData.loadType,
-      submittedBy: email,
-      submittedAt: new Date().toISOString(),
-      originalFiles: formData.selectedFiles.map(file => ({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified
-      })),
-      totalFileCount: formData.selectedFiles.length,
-      totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
-      zipFilename: generatedFilename,
-      schemaValidation: formData.loadType !== 'full' ? {
-        validationState: schemaValidationState,
-        targetTable: selectedTable,
-        sourceLayer: selectedSourceLayer,
-        sourceColumns: sourceColumns,
-        columnMapping: columnMapping,
-        validationCompleted: schemaValidationState === 'completed',
-        gdalAnalysis: gdalAnalysisResult,
-        mappingTimestamp: new Date().toISOString(),
-        postgreRestUrl: getPostgrestUrl(formData.domain) // Include which URL was used
-      } : null,
-      containsGeodatabase: formData.selectedFiles.some(file => 
-        file.name.includes('.gdb/') || file.name.endsWith('.gdb')
-      ),
-      userAgent: navigator.userAgent,
-      uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Schema Validation with Domain-Specific PostgREST URLs)',
-    };
+const generateMetadata = () => {
+  const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+  
+  return {
+    projectName: formData.projectName,
+    datasetName: formData.datasetName,
+    authorName: formData.authorName,
+    publicationType: formData.publicationType,
+    description: formData.description,
+    domain: effectiveDomain,
+    dataTopic: formData.dataTopic,
+    scale: formData.scale || null,
+    quadName: formData.quadName || null,
+    pubId: formData.pubId || null,
+    loadType: formData.loadType,
+    submittedBy: email,
+    submittedAt: new Date().toISOString(),
+    originalFiles: formData.selectedFiles.map(file => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified
+    })),
+    totalFileCount: formData.selectedFiles.length,
+    totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
+    zipFilename: generatedFilename,
+    // Changed from !== 'full' to === 'update'
+    schemaValidation: formData.loadType === 'update' ? {
+      validationState: schemaValidationState,
+      targetTable: selectedTable,
+      sourceLayer: selectedSourceLayer,
+      sourceColumns: sourceColumns,
+      columnMapping: columnMapping,
+      validationCompleted: schemaValidationState === 'completed',
+      gdalAnalysis: gdalAnalysisResult,
+      mappingTimestamp: new Date().toISOString(),
+      postgreRestUrl: getPostgrestUrl(formData.domain) // Include which URL was used
+    } : null,
+    containsGeodatabase: formData.selectedFiles.some(file => 
+      file.name.includes('.gdb/') || file.name.endsWith('.gdb')
+    ),
+    userAgent: navigator.userAgent,
+    uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Schema Validation with Domain-Specific PostgREST URLs)',
   };
+};
 
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
@@ -1223,21 +1225,22 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setUploadMessage('');
+const handleSubmit = async (e: FormEvent) => {
+  e.preventDefault();
+  setUploadMessage('');
 
-    if (!validateForm()) {
-      setUploadMessage('Please correct the errors in the form.');
-      return;
-    }
+  if (!validateForm()) {
+    setUploadMessage('Please correct the errors in the form.');
+    return;
+  }
 
-    if (formData.loadType !== 'full' && schemaValidationState !== 'completed') {
-      setUploadMessage('Please complete schema validation before uploading.');
-      return;
-    }
+  // Changed from !== 'full' to === 'update'
+  if (formData.loadType === 'update' && schemaValidationState !== 'completed') {
+    setUploadMessage('Please complete schema validation before uploading.');
+    return;
+  }
 
-    setIsSubmitting(true);
+  setIsSubmitting(true);
 
     try {
       // Step 1: Create zip file
