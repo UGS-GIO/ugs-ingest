@@ -118,7 +118,7 @@ export const publicationTypeOptions = [
 export const domainOptions = [
   { value: '', label: 'Select Domain' },
   { value: 'hazards', label: 'Hazards', schema: 'hazards' },
-  { value: 'groundwater', label: 'Groundwater', schema: 'groundwater' },
+  { value: 'groundwater', label: 'Groundwater', schema: 'gwportal' }, // Changed from 'groundwater' to 'gwportal'
   { value: 'wetlands', label: 'Wetlands', schema: 'wetlands' },
   { value: 'geologic_maps', label: 'Geologic Maps', schema: 'mapping' },
   { value: 'energy_minerals', label: 'Energy & Minerals', schema: 'emp' },

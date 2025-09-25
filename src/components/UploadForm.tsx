@@ -1,4 +1,4 @@
-// components/UploadForm.tsx - Refactored Main Component
+//Updated PostgREST URL Logic
 import React, { useState, useEffect } from 'react';
 import type { ChangeEvent, FormEvent, DragEvent } from 'react';
 import { useIAPUser } from '../hooks/useIAPUsers';
@@ -79,6 +79,25 @@ export const UploadForm: React.FC = () => {
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [generatedFilename, setGeneratedFilename] = useState<string>('');
   const [isProcessingFolders, setIsProcessingFolders] = useState<boolean>(false);
+
+  // ==========================================
+  // NEW: Domain-specific PostgREST URL logic
+  // ==========================================
+  
+  /**
+   * Get the appropriate PostgREST URL based on the domain
+   * @param domain - The domain value from the form
+   * @returns The PostgREST URL to use for this domain
+   */
+  const getPostgrestUrl = (domain: string): string => {
+    // Groundwater domain uses a different PostgREST service
+    if (domain === 'groundwater') {
+      return 'https://ugs-koop-umfdxaxiyq-wm.a.run.app';
+    }
+    
+    // All other domains use the default PostgREST service
+    return 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
+  };
 
   // Update author name when email is loaded
   useEffect(() => {
@@ -425,13 +444,124 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  // PostgREST and GDAL functions
-  const POSTGREST_URL = 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
+  // ==========================================
+  // UPDATED UPLOAD FUNCTION WITH SIGNED URLS
+  // ==========================================
+ const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
+  try {
+    const fileSizeMB = (zipBlob.size / 1024 / 1024).toFixed(2);
+    console.log('Starting upload process...');
+    console.log(`File: ${filename}`);
+    console.log(`Size: ${zipBlob.size} bytes (${fileSizeMB}MB)`);
 
+    // Phase 1: Get Signed URL
+    console.log('Phase 1: Requesting signed URL from Cloud Function...');
+    
+    const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
+    
+    const signedUrlResponse = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}&fileSize=${zipBlob.size}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Filename': filename,
+        'X-File-Size': zipBlob.size.toString(),
+      },
+    });
+
+    if (!signedUrlResponse.ok) {
+      let errorData;
+      try {
+        errorData = await signedUrlResponse.json();
+      } catch {
+        errorData = { error: `HTTP ${signedUrlResponse.status}: ${signedUrlResponse.statusText}` };
+      }
+      throw new Error(`Failed to get signed URL: ${errorData.error || signedUrlResponse.statusText}`);
+    }
+
+    const signedUrlData = await signedUrlResponse.json();
+    console.log('Phase 1 Complete: Signed URL received');
+
+    const { signedUrl, uploadedBy } = signedUrlData;
+
+    // Phase 2: Direct Upload to GCS (minimal headers)
+    console.log('Phase 2: Uploading directly to Cloud Storage...');
+    
+    const uploadStartTime = Date.now();
+    
+    const uploadResponse = await fetch(signedUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/zip',
+      },
+      body: zipBlob,
+    });
+
+    const uploadDuration = ((Date.now() - uploadStartTime) / 1000).toFixed(1);
+
+    if (!uploadResponse.ok) {
+      console.error('GCS upload error');
+      console.error('Response status:', uploadResponse.status);
+      throw new Error(`Upload to Cloud Storage failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+    }
+
+    console.log('Phase 2 Complete: File uploaded to Cloud Storage');
+
+    // Phase 3: Update file metadata
+    console.log('Phase 3: Adding metadata to uploaded file...');
+    
+    const metadata = {
+      'uploaded-by': uploadedBy,
+      'uploaded-at': new Date().toISOString(),
+      'source': 'UGS-Ingest-Web-Application',
+      'original-filename': filename,
+      'file-size-bytes': zipBlob.size.toString(),
+      'file-size-mb': fileSizeMB,
+      'upload-duration-seconds': uploadDuration
+    };
+
+    const metadataResponse = await fetch('/api/update-file-metadata', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        filename: filename,
+        metadata: metadata
+      })
+    });
+
+    if (metadataResponse.ok) {
+      console.log('Phase 3 Complete: Metadata added successfully');
+    } else {
+      console.warn('Phase 3 Warning: Failed to add metadata, but upload was successful');
+    }
+
+    // Success!
+    console.log(`Upload completed in ${uploadDuration} seconds`);
+    console.log(`File location: gs://${signedUrlData.bucket}/${filename}`);
+    console.log(`Upload speed: ${(zipBlob.size / 1024 / 1024 / parseFloat(uploadDuration)).toFixed(2)} MB/s`);
+    
+    return true;
+
+  } catch (error) {
+    console.error('Upload process failed:', error);
+    throw error;
+  }
+};
+
+  // ==========================================
+  // UPDATED PostgREST and GDAL functions
+  // ==========================================
+  
   const fetchAvailableTables = async (schemaName?: string): Promise<TableInfo[]> => {
     try {
       const schema = schemaName || 'mapping';
+      
+      // Get the appropriate PostgREST URL based on the current domain
+      const POSTGREST_URL = getPostgrestUrl(formData.domain);
+      
       console.log(`🔍 Discovering tables in schema: ${schema}`);
+      console.log(`🌐 Using PostgREST URL: ${POSTGREST_URL}`);
 
       const headers: Record<string, string> = {
         'Accept-Profile': schema
@@ -480,9 +610,10 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+  // ==========================================
+  // UPDATED GDAL ANALYSIS FUNCTIONS
+  // ==========================================
   const analyzeGdbColumnsWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
-    const GDAL_SERVICE_URL = '/api/gdal-proxy';
-    
     try {
       console.log('🔍 Using GDAL microservice to analyze geodatabase...');
       
@@ -503,110 +634,188 @@ export const UploadForm: React.FC = () => {
       }
       
       const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const tempFilename = `temp-analysis-${Date.now()}-${gdbFolderName}.zip`;
       
-      console.log('Step 1: Discovering layers in geodatabase...');
-      
-      const formData1 = new FormData();
-      formData1.append('file', new File([zipBlob], `${gdbFolderName}.zip`));
-      formData1.append('command', 'ogrinfo');
-      formData1.append('args', JSON.stringify(['-json', `/vsizip/${gdbFolderName}.zip/${gdbFolderName}`]));
-      
-      const response1 = await fetch(`${GDAL_SERVICE_URL}/upload-and-execute`, {
-        method: 'POST',
-        body: formData1
-      });
-      
-      if (!response1.ok) {
-        throw new Error(`GDAL service returned ${response1.status}`);
-      }
-      
-      const result1 = await response1.json();
-      
-      if (!result1.success || !result1.stdout) {
-        console.error('Failed to list layers:', result1.stderr);
-        return { layers: [], columns: [], gdalResult: null };
-      }
-      
-      const layersWithFields: LayerInfo[] = [];
-      try {
-        const gdbInfo = JSON.parse(result1.stdout);
-        const layers = gdbInfo.layers || [];
-        
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        console.log(`Found ${layers.length} layers:`, layers.map((l: any) => l.name));
-        
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        for (const layer of layers) {
-          const layerFields = new Set<string>();
-          
-          const fields = layer.fields || [];
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          for (const field of fields) {
-            if (field.name) {
-              layerFields.add(field.name);
-            }
-          }
-          
-          const geometryFields = layer.geometryFields || [];
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          for (const geomField of geometryFields) {
-            if (geomField.name) {
-              layerFields.add(geomField.name);
-            }
-          }
-          
-          const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
-          for (const field of commonFields) {
-            if (!Array.from(layerFields).some(col => col.toUpperCase() === field.toUpperCase())) {
-              layerFields.add(field);
-            }
-          }
-          
-          layersWithFields.push({
-            name: layer.name,
-            fields: Array.from(layerFields),
-            featureCount: layer.featureCount || 'Unknown',
-            geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
-          });
-          
-          console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
-        }
+      console.log(`📦 Created analysis zip: ${tempFilename} (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB)`);
 
-        const gdalResult: GDALAnalysisResult = {
-          layers: layersWithFields,
-          gdbFolderName: gdbFolderName,
-          totalLayers: layersWithFields.length,
-          analysisTimestamp: new Date().toISOString()
-        };
-
-        if (layersWithFields.length === 1) {
-          console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
-          const resultWithSelection: GDALAnalysisResult = {
-            ...gdalResult,
-            selectedLayer: layersWithFields[0]
-          };
-          
-          return { 
-            layers: layersWithFields, 
-            columns: layersWithFields[0].fields,
-            gdalResult: resultWithSelection
-          };
-        }
-        
-        console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
-        return { 
-          layers: layersWithFields, 
-          columns: [],
-          gdalResult: gdalResult
-        };
-        
-      } catch (e) {
-        console.error('Failed to parse layer list JSON:', e);
-        return { layers: [], columns: [], gdalResult: null };
+      // Check if file is too large for direct upload
+      const MAX_DIRECT_SIZE = 50 * 1024 * 1024; // 50MB limit for direct uploads
+      
+      if (zipBlob.size > MAX_DIRECT_SIZE) {
+        console.log(`⚠️ File too large for direct upload (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB), using Cloud Storage staging...`);
+        return await analyzeGdbViaCloudStorage(zipBlob, tempFilename, gdbFolderName);
+      } else {
+        console.log(`✅ File size OK for direct upload (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB), using direct method...`);
+        return await analyzeGdbDirect(zipBlob, tempFilename, gdbFolderName);
       }
       
     } catch (error) {
       console.error('Error using GDAL microservice:', error);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+  };
+
+  // Direct analysis for smaller files
+  const analyzeGdbDirect = async (zipBlob: Blob, tempFilename: string, gdbFolderName: string): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
+    console.log('Step 1: Discovering layers in geodatabase (direct upload)...');
+    
+    const formData = new FormData();
+    formData.append('file', new File([zipBlob], tempFilename));
+    formData.append('command', 'ogrinfo');
+    formData.append('args', JSON.stringify(['-json', `/vsizip/${tempFilename}/${gdbFolderName}`]));
+    
+    const response = await fetch('/api/gdal-proxy/upload-and-execute', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      throw new Error(`GDAL service returned ${response.status}`);
+    }
+    
+    const result = await response.json();
+    return processGdalResult(result, gdbFolderName);
+  };
+
+  // Cloud Storage analysis for larger files
+  const analyzeGdbViaCloudStorage = async (zipBlob: Blob, tempFilename: string, gdbFolderName: string): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
+    try {
+      console.log('🔄 Using Cloud Storage staging for large geodatabase analysis...');
+      
+      // Step 1: Upload to Cloud Storage using signed URLs
+      console.log('Step 1: Uploading to Cloud Storage for analysis...');
+      const uploaded = await uploadZipToGCS(zipBlob, tempFilename);
+      
+      if (!uploaded) {
+        throw new Error('Failed to upload file to Cloud Storage for analysis');
+      }
+      
+      // Step 2: Tell GDAL service to analyze from Cloud Storage
+      console.log('Step 2: Requesting GDAL analysis from Cloud Storage...');
+      const analysisResponse = await fetch('/api/gdal-proxy/analyze-from-storage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          bucket: 'stagedzips',
+          filename: tempFilename,
+          gdbFolderName: gdbFolderName,
+          command: 'ogrinfo',
+          args: ['-json', `/vsizip/${tempFilename}/${gdbFolderName}`]
+        })
+      });
+      
+      if (!analysisResponse.ok) {
+        throw new Error(`GDAL analysis failed: ${analysisResponse.status}`);
+      }
+      
+      const result = await analysisResponse.json();
+      
+      // Step 3: Clean up temporary file
+      console.log('Step 3: Cleaning up temporary analysis file...');
+      try {
+        await fetch('/api/gdal-proxy/cleanup-temp-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bucket: 'stagedzips', filename: tempFilename })
+        });
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temp file:', cleanupError);
+      }
+      
+      return processGdalResult(result, gdbFolderName);
+      
+    } catch (error) {
+      console.error('Error in Cloud Storage analysis workflow:', error);
+      throw error;
+    }
+  };
+
+  // Shared result processing
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const processGdalResult = (result: any, gdbFolderName: string): { layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null } => {
+    if (!result.success || !result.stdout) {
+      console.error('Failed to list layers:', result.stderr);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+    const layersWithFields: LayerInfo[] = [];
+    
+    try {
+      const gdbInfo = JSON.parse(result.stdout);
+      const layers = gdbInfo.layers || [];
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      console.log(`Found ${layers.length} layers:`, layers.map((l: any) => l.name));
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const layer of layers) {
+        const layerFields = new Set<string>();
+        
+        const fields = layer.fields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const field of fields) {
+          if (field.name) {
+            layerFields.add(field.name);
+          }
+        }
+        
+        const geometryFields = layer.geometryFields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const geomField of geometryFields) {
+          if (geomField.name) {
+            layerFields.add(geomField.name);
+          }
+        }
+        
+        const commonFields = ['OBJECTID', 'Shape', 'Shape_Length', 'Shape_Area'];
+        for (const field of commonFields) {
+          if (!Array.from(layerFields).some(col => col.toUpperCase() === field.toUpperCase())) {
+            layerFields.add(field);
+          }
+        }
+        
+        layersWithFields.push({
+          name: layer.name,
+          fields: Array.from(layerFields),
+          featureCount: layer.featureCount || 'Unknown',
+          geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
+        });
+        
+        console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
+      }
+
+      const gdalResult: GDALAnalysisResult = {
+        layers: layersWithFields,
+        gdbFolderName: gdbFolderName,
+        totalLayers: layersWithFields.length,
+        analysisTimestamp: new Date().toISOString()
+      };
+
+      if (layersWithFields.length === 1) {
+        console.log(`✅ Single layer found: ${layersWithFields[0].name}, auto-selecting`);
+        const resultWithSelection: GDALAnalysisResult = {
+          ...gdalResult,
+          selectedLayer: layersWithFields[0]
+        };
+        
+        return { 
+          layers: layersWithFields, 
+          columns: layersWithFields[0].fields,
+          gdalResult: resultWithSelection
+        };
+      }
+      
+      console.log(`✅ Found ${layersWithFields.length} layers, requiring user selection`);
+      return { 
+        layers: layersWithFields, 
+        columns: [],
+        gdalResult: gdalResult
+      };
+      
+    } catch (e) {
+      console.error('Failed to parse layer list JSON:', e);
       return { layers: [], columns: [], gdalResult: null };
     }
   };
@@ -742,6 +951,12 @@ export const UploadForm: React.FC = () => {
 
   const fetchTableSchema = async (schema: string, tableName: string): Promise<ColumnInfo[]> => {
     try {
+      // Get the appropriate PostgREST URL based on the current domain
+      const POSTGREST_URL = getPostgrestUrl(formData.domain);
+      
+      console.log(`🔍 Fetching schema for ${schema}.${tableName}`);
+      console.log(`🌐 Using PostgREST URL: ${POSTGREST_URL}`);
+
       const headers: Record<string, string> = {
         'Accept-Profile': schema
       };
@@ -956,13 +1171,14 @@ export const UploadForm: React.FC = () => {
         columnMapping: columnMapping,
         validationCompleted: schemaValidationState === 'completed',
         gdalAnalysis: gdalAnalysisResult,
-        mappingTimestamp: new Date().toISOString()
+        mappingTimestamp: new Date().toISOString(),
+        postgreRestUrl: getPostgrestUrl(formData.domain) // Include which URL was used
       } : null,
       containsGeodatabase: formData.selectedFiles.some(file => 
         file.name.includes('.gdb/') || file.name.endsWith('.gdb')
       ),
       userAgent: navigator.userAgent,
-      uploadSource: 'UGS Ingest Web Application v2.0 (Enhanced Schema Validation)',
+      uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Schema Validation with Domain-Specific PostgREST URLs)',
     };
   };
 
@@ -983,38 +1199,6 @@ export const UploadForm: React.FC = () => {
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  };
-
-  const uploadZipToGCS = async (zipBlob: Blob, filename: string): Promise<boolean> => {
-    try {
-      const functionUrl = `https://us-central1-${process.env.REACT_APP_PROJECT_ID || 'ut-dnr-ugs-backend-tools'}.cloudfunctions.net/ugs-zip-upload`;
-      
-      console.log('Uploading to Cloud Function:', functionUrl);
-      console.log('Filename:', filename);
-      console.log('Zip size:', zipBlob.size, 'bytes');
-
-      const response = await fetch(`${functionUrl}?filename=${encodeURIComponent(filename)}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/zip',
-          'X-Filename': filename,
-        },
-        body: zipBlob,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(`Upload failed: ${errorData.error || response.statusText}`);
-      }
-
-      const result = await response.json();
-      console.log('✅ Upload successful:', result);
-      return true;
-
-    } catch (error) {
-      console.error('❌ Upload to GCS failed:', error);
-      throw error;
-    }
   };
 
   const createZipFile = async (): Promise<Blob> => {
@@ -1056,16 +1240,27 @@ export const UploadForm: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      setUploadMessage('Creating zip file...');
+      // Step 1: Create zip file
+      setUploadMessage('📦 Creating zip file...');
       const zipBlob = await createZipFile();
       
-      console.log('Generated filename:', generatedFilename);
-      console.log('Zip file created with size:', zipBlob.size);
+      const fileSizeMB = (zipBlob.size / 1024 / 1024).toFixed(2);
+      console.log(`📦 Zip file created: ${generatedFilename} (${fileSizeMB}MB)`);
 
-      setUploadMessage('Uploading to cloud storage...');
+      // Step 2: Show appropriate message based on file size
+      if (zipBlob.size > 100 * 1024 * 1024) { // 100MB+
+        setUploadMessage(`📤 Uploading large file (${fileSizeMB}MB) - this may take several minutes...`);
+      } else if (zipBlob.size > 10 * 1024 * 1024) { // 10MB+
+        setUploadMessage(`📤 Uploading file (${fileSizeMB}MB) - please wait...`);
+      } else {
+        setUploadMessage('📤 Uploading to cloud storage...');
+      }
+
+      // Step 3: Upload using signed URLs
       await uploadZipToGCS(zipBlob, generatedFilename);
 
-      setUploadMessage(`✅ Upload successful! File "${generatedFilename}" has been uploaded to cloud storage.`);
+      // Step 4: Success message
+      setUploadMessage(`✅ Upload successful! File "${generatedFilename}" (${fileSizeMB}MB) has been uploaded to cloud storage.`);
       
       // Reset form
       setFormData({
@@ -1226,6 +1421,20 @@ export const UploadForm: React.FC = () => {
         </div>
       </div>
 
+      {/* Domain-specific PostgREST URL indicator */}
+      {formData.domain && (
+        <div className="mb-6 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <p className="text-xs text-gray-700">
+            <strong>PostgREST Service:</strong> {getPostgrestUrl(formData.domain)}
+            {formData.domain === 'groundwater' && (
+              <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">
+                Using Groundwater-specific service
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
       {/* Schema Validation Status */}
       <SchemaValidationStatus
         loadType={formData.loadType}
@@ -1301,15 +1510,16 @@ export const UploadForm: React.FC = () => {
 
         <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
           <p className="text-xs text-blue-700">
-            <strong>Enhanced Schema Validation:</strong> The application now supports separated schema validation and upload workflows! 
-            Complete field mapping validation before uploading to ensure data integrity and proper schema compliance.
+            <strong>Enhanced Upload System:</strong> This application now supports unlimited file sizes using Cloud Storage signed URLs! 
+            Large geodatabases are automatically handled through Cloud Storage staging for both schema validation and final upload.
+            The system automatically selects the appropriate PostgREST service based on your chosen domain.
           </p>
         </div>
 
         <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
           <p className="text-xs text-gray-600">
             <strong>Audit Trail:</strong> All uploads are logged with user identification, timestamp, 
-            file details, and schema validation results. A metadata.json file will be included in the zip with complete audit information.
+            file details, schema validation results, and PostgREST service information. A metadata.json file will be included in the zip with complete audit information.
           </p>
         </div>
       </form> 

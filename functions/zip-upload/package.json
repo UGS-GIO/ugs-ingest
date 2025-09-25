@@ -1,17 +1,18 @@
 {
   "name": "ugs-zip-upload-function",
-  "version": "1.0.0",
-  "description": "Cloud Function to upload UGS dataset zips to GCS",
+  "version": "2.0.0",
+  "description": "Cloud Function to generate signed URLs for UGS dataset uploads to GCS",
   "main": "index.js",
   "engines": {
     "node": "20"
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^3.3.0",
-    "@google-cloud/storage": "^7.7.0"
+    "@google-cloud/storage": "^7.17.0"
   },
   "scripts": {
-    "start": "functions-framework --target=uploadZip",
-    "deploy": "gcloud functions deploy ugs-zip-upload --runtime nodejs20 --trigger-http --allow-unauthenticated --region us-central1 --memory 512MB --timeout 540s"
+    "start": "functions-framework --target=ugs-zip-upload",
+    "deploy": "gcloud functions deploy ugs-zip-upload --runtime nodejs20 --trigger-http --region us-central1 --memory 256MB --timeout 60s --allow-unauthenticated",
+    "deploy-with-auth": "gcloud functions deploy ugs-zip-upload --runtime nodejs20 --trigger-http --region us-central1 --memory 256MB --timeout 60s"
   }
 }
