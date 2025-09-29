@@ -29,6 +29,7 @@ import { LayerSelectionModal } from './LayerSelectionModal';
 import { ManualColumnModal } from './ManualColumnModal';
 import { SchemaMappingModal } from './SchemaMappingModal';
 import { ActionButtons } from './ActionButtons';
+import { CorrectionFields } from './CorrectionFields';
 
 declare global {
   interface Window {
@@ -54,6 +55,8 @@ export const UploadForm: React.FC = () => {
     quadName: '',
     pubId: '',
     loadType: '',
+    isCorrection: false,
+    correctionReason: '',
   });
 
   // State for schema validation workflow
@@ -1153,6 +1156,8 @@ const generateMetadata = () => {
     quadName: formData.quadName || null,
     pubId: formData.pubId || null,
     loadType: formData.loadType,
+    isCorrection: formData.isCorrection,
+    correctionReason: formData.isCorrection ? formData.correctionReason : null,
     submittedBy: email,
     submittedAt: new Date().toISOString(),
     originalFiles: formData.selectedFiles.map(file => ({
@@ -1164,7 +1169,6 @@ const generateMetadata = () => {
     totalFileCount: formData.selectedFiles.length,
     totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
     zipFilename: generatedFilename,
-    // Changed from !== 'full' to === 'update'
     schemaValidation: formData.loadType === 'update' ? {
       validationState: schemaValidationState,
       targetTable: selectedTable,
@@ -1174,7 +1178,7 @@ const generateMetadata = () => {
       validationCompleted: schemaValidationState === 'completed',
       gdalAnalysis: gdalAnalysisResult,
       mappingTimestamp: new Date().toISOString(),
-      postgreRestUrl: getPostgrestUrl(formData.domain) // Include which URL was used
+      postgreRestUrl: getPostgrestUrl(formData.domain)
     } : null,
     containsGeodatabase: formData.selectedFiles.some(file => 
       file.name.includes('.gdb/') || file.name.endsWith('.gdb')
@@ -1198,6 +1202,10 @@ const generateMetadata = () => {
     }
     if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
     if (!formData.loadType) newErrors.loadType = 'Load type is required.';
+
+if (formData.loadType === 'update' && formData.isCorrection && !formData.correctionReason.trim()) {
+  newErrors.correctionReason = 'Correction reason is required when marking as a data correction.';
+}
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -1280,6 +1288,8 @@ const handleSubmit = async (e: FormEvent) => {
         quadName: '',
         pubId: '',
         loadType: '',
+        isCorrection: false,
+        correctionReason: '',
       });
       setErrors({});
       setGeneratedFilename('');
@@ -1322,6 +1332,21 @@ const handleSubmit = async (e: FormEvent) => {
     setManualColumnInput('');
     setSchemaValidationState('not_started');
   };
+
+  const handleCorrectionToggle = (checked: boolean) => {
+  setFormData(prev => ({
+    ...prev,
+    isCorrection: checked,
+    // Clear correction reason if unchecked
+    correctionReason: checked ? prev.correctionReason : '',
+  }));
+  
+  // Clear any correction reason error when unchecking
+  if (!checked && errors.correctionReason) {
+    setErrors(prev => ({ ...prev, correctionReason: undefined }));
+  }
+};
+
 
   // Loading state
   if (loading) {
@@ -1471,19 +1496,28 @@ const handleSubmit = async (e: FormEvent) => {
           handleChange={handleChange}
         />
 
-        {/* File Upload Section */}
-        <FileUploadSection
+        {/* Correction Fields Section - Only shows for "update" loadType */}
+        <CorrectionFields
           formData={formData}
           errors={errors}
-          isDragging={isDragging}
-          isProcessingFolders={isProcessingFolders}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onFileOrFolderSelect={handleFileOrFolderSelect}
-          onFileChange={handleFileChange}
-          onRemoveFile={removeFile}
+          handleChange={handleChange}
+          onCorrectionToggle={handleCorrectionToggle}
         />
+
+
+{/* File Upload Section */}
+<FileUploadSection
+  formData={formData}
+  errors={errors}
+  isDragging={isDragging}
+  isProcessingFolders={isProcessingFolders}
+  onDragOver={handleDragOver}
+  onDragLeave={handleDragLeave}
+  onDrop={handleDrop}
+  onFileOrFolderSelect={handleFileOrFolderSelect}
+  onFileChange={handleFileChange}
+  onRemoveFile={removeFile}
+/>
 
         {/* Action Buttons */}
         <ActionButtons

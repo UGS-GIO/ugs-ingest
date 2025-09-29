@@ -80,7 +80,10 @@ export interface FormData {
   quadName: string;
   pubId: string;
   loadType: string;
+  isCorrection: boolean;
+  correctionReason: string;
 }
+
 
 
 // Define the shape of our errors
@@ -98,6 +101,7 @@ export interface FormErrors {
   quadName?: string;
   pubId?: string;
   loadType?: string;
+  correctionReason?: string;
 }
 export type SchemaValidationState = 'not_started' | 'validating' | 'layer_selection' | 'mapping' | 'completed';
 
