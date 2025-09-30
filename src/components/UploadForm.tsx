@@ -874,61 +874,258 @@ const checkTableAndSchemaVersion = async (targetTable: string): Promise<string> 
     }
   };
 
-  const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[], gdalResult?: GDALAnalysisResult | null }> => {
-    const allColumns = new Set<string>();
-
-    const hasGDB = files.some(f => f.name.includes('.gdb/'));
+  const analyzeShapefileWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
+  try {
+    console.log('🔍 Using GDAL microservice to analyze shapefile...');
     
-    if (hasGDB) {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    
+    // Find all shapefile components (.shp, .shx, .dbf, .prj, etc.)
+    const shpFiles = files.filter(f => {
+      const ext = f.name.toLowerCase().split('.').pop();
+      return ['shp', 'shx', 'dbf', 'prj', 'cpg', 'sbn', 'sbx'].includes(ext || '');
+    });
+    
+    if (shpFiles.length === 0) {
+      console.log('No shapefile components found');
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+    // Get the base name (without extension)
+    const shpBaseName = shpFiles.find(f => f.name.toLowerCase().endsWith('.shp'))?.name.replace('.shp', '') || 'shapefile';
+    console.log(`📁 Processing shapefile: ${shpBaseName}`);
+    
+    // Add all shapefile components to zip
+    for (const file of shpFiles) {
+      zip.file(file.name, file);
+    }
+    
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const tempFilename = `temp-analysis-${Date.now()}-${shpBaseName}.zip`;
+    
+    console.log(`📦 Created analysis zip: ${tempFilename} (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB)`);
+
+    // Use direct or cloud storage method based on size
+    const MAX_DIRECT_SIZE = 50 * 1024 * 1024;
+    
+    let result;
+    if (zipBlob.size > MAX_DIRECT_SIZE) {
+      console.log(`⚠️ File too large for direct upload, using Cloud Storage staging...`);
+      const uploaded = await uploadZipToGCS(zipBlob, tempFilename);
+      if (!uploaded) {
+        throw new Error('Failed to upload file to Cloud Storage for analysis');
+      }
+      
+      const analysisResponse = await fetch('/api/gdal-proxy/analyze-from-storage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'stagedzips',
+          filename: tempFilename,
+          command: 'ogrinfo',
+          args: ['-json', '-al', `/vsizip/${tempFilename}/${shpBaseName}.shp`]
+        })
+      });
+      
+      if (!analysisResponse.ok) {
+        throw new Error(`GDAL analysis failed: ${analysisResponse.status}`);
+      }
+      
+      result = await analysisResponse.json();
+      
+      // Cleanup
       try {
-        const { layers, columns, gdalResult } = await analyzeGdbColumnsWithGDAL(files);
+        await fetch('/api/gdal-proxy/cleanup-temp-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bucket: 'stagedzips', filename: tempFilename })
+        });
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temp file:', cleanupError);
+      }
+    } else {
+      console.log(`✅ File size OK for direct upload, using direct method...`);
+      const formData = new FormData();
+      formData.append('file', new File([zipBlob], tempFilename));
+      formData.append('command', 'ogrinfo');
+      formData.append('args', JSON.stringify(['-json', '-al', `/vsizip/${tempFilename}/${shpBaseName}.shp`]));
+      
+      const response = await fetch('/api/gdal-proxy/upload-and-execute', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        throw new Error(`GDAL service returned ${response.status}`);
+      }
+      
+      result = await response.json();
+    }
+    
+    // Process the result
+    if (!result.success || !result.stdout) {
+      console.error('Failed to analyze shapefile:', result.stderr);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+    const layersWithFields: LayerInfo[] = [];
+    
+    try {
+      const shpInfo = JSON.parse(result.stdout);
+      const layers = shpInfo.layers || [];
+      
+      console.log(`Found ${layers.length} layers in shapefile`);
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const layer of layers) {
+        const layerFields = new Set<string>();
         
-        if (layers.length > 1) {
-          setSourceLayerInfo(layers);
-          setGdalAnalysisResult(gdalResult);
-          return { 
-            needsLayerSelection: true, 
-            columns: [], 
-            layers,
-            gdalResult
-          };
-        } else if (layers.length === 1) {
-          columns.forEach(col => allColumns.add(col));
-          setGdalAnalysisResult(gdalResult);
-          if (columns.length > 0) {
-            return { 
-              needsLayerSelection: false, 
-              columns: Array.from(allColumns),
-              gdalResult
-            };
+        const fields = layer.fields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const field of fields) {
+          if (field.name) {
+            layerFields.add(field.name);
           }
         }
-      } catch (error) {
-        console.error('Failed to analyze GDB with GDAL service:', error);
-      }
-    }
-
-    for (const file of files) {
-      try {
-        if (file.name.toLowerCase().endsWith('.csv')) {
-          const columns = await analyzeCsvColumns(file);
-          columns.forEach(col => allColumns.add(col));
-        } else if (file.name.toLowerCase().endsWith('.dbf')) {
-          console.log('DBF file detected:', file.name);
-          const columns = await analyzeDbfColumns(file);
-          columns.forEach(col => allColumns.add(col));
+        
+        const geometryFields = layer.geometryFields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const geomField of geometryFields) {
+          if (geomField.name) {
+            layerFields.add(geomField.name);
+          }
         }
-      } catch (error) {
-        console.error('Error analyzing file:', file.name, error);
+        
+        layersWithFields.push({
+          name: layer.name,
+          fields: Array.from(layerFields),
+          featureCount: layer.featureCount || 'Unknown',
+          geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
+        });
+        
+        console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
       }
-    }
 
-    return { 
-      needsLayerSelection: false, 
-      columns: Array.from(allColumns),
-      gdalResult: null
-    };
+      const gdalResult: GDALAnalysisResult = {
+        layers: layersWithFields,
+        totalLayers: layersWithFields.length,
+        analysisTimestamp: new Date().toISOString(),
+        // Add CRS and other metadata from the shapefile
+        crs: shpInfo.layers?.[0]?.geometryFields?.[0]?.coordinateSystem,
+        extent: shpInfo.layers?.[0]?.geometryFields?.[0]?.extent
+      };
+
+      if (layersWithFields.length === 1) {
+        console.log(`✅ Single layer found: ${layersWithFields[0].name}`);
+        const resultWithSelection: GDALAnalysisResult = {
+          ...gdalResult,
+          selectedLayer: layersWithFields[0]
+        };
+        
+        return { 
+          layers: layersWithFields, 
+          columns: layersWithFields[0].fields,
+          gdalResult: resultWithSelection
+        };
+      }
+      
+      return { 
+        layers: layersWithFields, 
+        columns: layersWithFields[0]?.fields || [],
+        gdalResult: gdalResult
+      };
+      
+    } catch (e) {
+      console.error('Failed to parse shapefile analysis JSON:', e);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+  } catch (error) {
+    console.error('Error using GDAL microservice for shapefile:', error);
+    return { layers: [], columns: [], gdalResult: null };
+  }
+};
+
+const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[], gdalResult?: GDALAnalysisResult | null }> => {
+  const allColumns = new Set<string>();
+
+  // Check for geodatabase
+  const hasGDB = files.some(f => f.name.includes('.gdb/'));
+  
+  if (hasGDB) {
+    try {
+      const { layers, columns, gdalResult } = await analyzeGdbColumnsWithGDAL(files);
+      
+      if (layers.length > 1) {
+        setSourceLayerInfo(layers);
+        setGdalAnalysisResult(gdalResult);
+        return { 
+          needsLayerSelection: true, 
+          columns: [], 
+          layers,
+          gdalResult
+        };
+      } else if (layers.length === 1) {
+        columns.forEach(col => allColumns.add(col));
+        setGdalAnalysisResult(gdalResult);
+        if (columns.length > 0) {
+          return { 
+            needsLayerSelection: false, 
+            columns: Array.from(allColumns),
+            gdalResult
+          };
+        }
+      }
+    } catch (error) {
+      console.error('Failed to analyze GDB with GDAL service:', error);
+    }
+  }
+
+  // NEW: Check for shapefiles and use GDAL analysis
+  const hasShapefile = files.some(f => f.name.toLowerCase().endsWith('.shp'));
+  
+  if (hasShapefile) {
+    try {
+      const { columns, gdalResult } = await analyzeShapefileWithGDAL(files);
+      
+      if (columns.length > 0) {
+        columns.forEach(col => allColumns.add(col));
+        setGdalAnalysisResult(gdalResult);
+        return { 
+          needsLayerSelection: false, 
+          columns: Array.from(allColumns),
+          gdalResult
+        };
+      }
+    } catch (error) {
+      console.error('Failed to analyze shapefile with GDAL service:', error);
+      // Fall back to DBF analysis if GDAL fails
+    }
+  }
+
+  // Fallback: Process other file types (CSV, DBF without shapefile)
+  for (const file of files) {
+    try {
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        const columns = await analyzeCsvColumns(file);
+        columns.forEach(col => allColumns.add(col));
+      } else if (file.name.toLowerCase().endsWith('.dbf') && !hasShapefile) {
+        console.log('DBF file detected (no shapefile):', file.name);
+        const columns = await analyzeDbfColumns(file);
+        columns.forEach(col => allColumns.add(col));
+      }
+    } catch (error) {
+      console.error('Error analyzing file:', file.name, error);
+    }
+  }
+
+  return { 
+    needsLayerSelection: false, 
+    columns: Array.from(allColumns),
+    gdalResult: null
   };
+};
 
   const analyzeDbfColumns = async (file: File): Promise<string[]> => {
     try {

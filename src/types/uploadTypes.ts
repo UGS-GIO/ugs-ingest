@@ -64,6 +64,8 @@ export interface GDALAnalysisResult {
   gdbFolderName?: string;
   totalLayers: number;
   analysisTimestamp: string;
+  crs?: any; // Coordinate Reference System information
+  extent?: number[]; // Bounding box [minX, minY, maxX, maxY]
 }
 
 export interface FormData {
