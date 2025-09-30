@@ -82,6 +82,9 @@ export interface FormData {
   loadType: string;
   isCorrection: boolean;
   correctionReason: string;
+  tableType: 'fact' | 'dimension' | '';
+  uniqueKey: string;
+  reviewStatus: 'Y' | 'N' | 'R' | '';
 }
 
 
@@ -102,6 +105,9 @@ export interface FormErrors {
   pubId?: string;
   loadType?: string;
   correctionReason?: string;
+  tableType?: string;
+  uniqueKey?: string;
+  reviewStatus?: string;
 }
 export type SchemaValidationState = 'not_started' | 'validating' | 'layer_selection' | 'mapping' | 'completed';
 
@@ -127,6 +133,19 @@ export const domainOptions = [
   { value: 'boreholes', label: 'Boreholes', schema: 'boreholes' },
   { value: 'geochron', label: 'Geochronology', schema: 'geochron' },
   { value: 'custom', label: 'Other (specify)' },
+];
+
+export const tableTypeOptions = [
+  { value: '', label: 'Select Table Type' },
+  { value: 'fact', label: 'Fact Table' },
+  { value: 'dimension', label: 'Dimension Table' },
+];
+
+export const reviewStatusOptions = [
+  { value: '', label: 'Select Review Status' },
+  { value: 'Y', label: 'Y - Reviewed and Approved' },
+  { value: 'N', label: 'N - Not Yet Reviewed' },
+  { value: 'R', label: 'R - Needs Revision' },
 ];
 
 // Updated loadTypeOptions - only "new_table" and "update"

@@ -30,6 +30,7 @@ import { ManualColumnModal } from './ManualColumnModal';
 import { SchemaMappingModal } from './SchemaMappingModal';
 import { ActionButtons } from './ActionButtons';
 import { CorrectionFields } from './CorrectionFields';
+import { MetadataFields } from './MetadataFields';
 
 declare global {
   interface Window {
@@ -57,6 +58,9 @@ export const UploadForm: React.FC = () => {
     loadType: '',
     isCorrection: false,
     correctionReason: '',
+    tableType: '',
+    uniqueKey: '',
+    reviewStatus: '',
   });
 
   // State for schema validation workflow
@@ -101,6 +105,20 @@ export const UploadForm: React.FC = () => {
     // All other domains use the default PostgREST service
     return 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
   };
+
+  useEffect(() => {
+  if (formData.loadType === 'new_table' && formData.domain && formData.dataTopic) {
+    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+    if (effectiveDomain && formData.dataTopic) {
+      const viewName = `${effectiveDomain}.${formData.dataTopic}.raw.unified`;
+      setUnifiedViewName(viewName);
+    } else {
+      setUnifiedViewName('');
+    }
+  } else {
+    setUnifiedViewName('');
+  }
+}, [formData.loadType, formData.domain, formData.customDomain, formData.dataTopic]);
 
   // Update author name when email is loaded
   useEffect(() => {
@@ -153,6 +171,39 @@ export const UploadForm: React.FC = () => {
 
     generateFilename();
   }, [formData]);
+
+const [unifiedViewName, setUnifiedViewName] = useState<string>('');
+const [schemaVersion, setSchemaVersion] = useState<string>('v1');
+
+const checkTableAndSchemaVersion = async (targetTable: string): Promise<string> => {
+  try {
+    // For update operations, check if source columns match target table schema
+    if (formData.loadType === 'update' && targetTable && sourceColumns.length > 0) {
+      const [schema, tableName] = targetTable.split('.');
+      const targetTableColumns = await fetchTableSchema(schema, tableName);
+      
+      // Compare source columns with target table schema
+      const targetColumnNames = targetTableColumns.map(col => col.name.toLowerCase());
+      const sourceColumnNames = sourceColumns.map(col => col.toLowerCase());
+      
+      // Check if columns have changed
+      const hasNewColumns = sourceColumnNames.some(col => !targetColumnNames.includes(col));
+      const hasRemovedColumns = targetColumnNames.some(col => !sourceColumnNames.includes(col));
+      
+      if (hasNewColumns || hasRemovedColumns) {
+        // Schema has changed, increment version
+        // In a real implementation, you'd fetch the current version from the database
+        // For now, we'll return v2 if schema changed
+        return 'v2';
+      }
+    }
+    
+    return 'v1'; // Default version for new tables or unchanged schemas
+  } catch (error) {
+    console.error('Error checking schema version:', error);
+    return 'v1';
+  }
+};
 
   // Handle changes for text and select inputs
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -1098,10 +1149,14 @@ export const UploadForm: React.FC = () => {
   const handleTableSelection = async (tableFullName: string) => {
     setSelectedTable(tableFullName);
     
-    if (tableFullName) {
-      const [schema, tableName] = tableFullName.split('.');
-      const columns = await fetchTableSchema(schema, tableName);
-      setTargetColumns(columns);
+  if (tableFullName) {
+    const [schema, tableName] = tableFullName.split('.');
+    const columns = await fetchTableSchema(schema, tableName);
+    setTargetColumns(columns);
+    
+    // Check schema version
+    const version = await checkTableAndSchemaVersion(tableFullName);
+    setSchemaVersion(version);
       
       const newMapping: {[key: string]: string} = {};
       sourceColumns.forEach(sourceCol => {
@@ -1158,6 +1213,11 @@ const generateMetadata = () => {
     loadType: formData.loadType,
     isCorrection: formData.isCorrection,
     correctionReason: formData.isCorrection ? formData.correctionReason : null,
+    schema_version: schemaVersion,
+    table_type: formData.loadType === 'new_table' ? formData.tableType : null,
+    unique_key: formData.loadType === 'new_table' ? formData.uniqueKey : null,
+    review_status: formData.reviewStatus,
+    unified_view_name: formData.loadType === 'new_table' ? unifiedViewName : null,
     submittedBy: email,
     submittedAt: new Date().toISOString(),
     originalFiles: formData.selectedFiles.map(file => ({
@@ -1203,13 +1263,22 @@ const generateMetadata = () => {
     if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
     if (!formData.loadType) newErrors.loadType = 'Load type is required.';
 
-if (formData.loadType === 'update' && formData.isCorrection && !formData.correctionReason.trim()) {
-  newErrors.correctionReason = 'Correction reason is required when marking as a data correction.';
-}
+if (!formData.reviewStatus) newErrors.reviewStatus = 'Review status is required.';
+  
+  // Only validate these for new_table
+  if (formData.loadType === 'new_table') {
+    if (!formData.tableType) newErrors.tableType = 'Table type is required for new tables.';
+    if (!formData.uniqueKey.trim()) newErrors.uniqueKey = 'Unique key is required for new tables.';
+  }
+  
+  if (formData.loadType === 'update' && formData.isCorrection && !formData.correctionReason.trim()) {
+    newErrors.correctionReason = 'Correction reason is required when marking as a data correction.';
+  }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+  setErrors(newErrors);
+  return Object.keys(newErrors).length === 0;
+};
+
 
   const createZipFile = async (): Promise<Blob> => {
     const JSZip = (await import('jszip')).default;
@@ -1290,6 +1359,9 @@ const handleSubmit = async (e: FormEvent) => {
         loadType: '',
         isCorrection: false,
         correctionReason: '',
+        tableType: '',
+        uniqueKey: '',
+        reviewStatus: '',
       });
       setErrors({});
       setGeneratedFilename('');
@@ -1503,6 +1575,14 @@ const handleSubmit = async (e: FormEvent) => {
           handleChange={handleChange}
           onCorrectionToggle={handleCorrectionToggle}
         />
+
+        {/* Metadata Fields Section */}
+<MetadataFields
+  formData={formData}
+  errors={errors}
+  handleChange={handleChange}
+  unifiedViewName={unifiedViewName}
+/>
 
 
 {/* File Upload Section */}
