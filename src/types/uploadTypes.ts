@@ -87,6 +87,7 @@ export interface FormData {
   tableType: 'fact' | 'dimension' | '';
   uniqueKey: string;
   reviewStatus: 'Y' | 'N' | 'R' | '';
+  publicationDate: string; // ISO date string YYYY-MM-DD
 }
 
 
@@ -110,6 +111,8 @@ export interface FormErrors {
   tableType?: string;
   uniqueKey?: string;
   reviewStatus?: string;
+  publicationDate?: string;
+  
 }
 export type SchemaValidationState = 'not_started' | 'validating' | 'layer_selection' | 'mapping' | 'completed';
 

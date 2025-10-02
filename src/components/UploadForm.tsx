@@ -61,6 +61,7 @@ export const UploadForm: React.FC = () => {
     tableType: '',
     uniqueKey: '',
     reviewStatus: '',
+    publicationDate: '',
   });
 
   // State for schema validation workflow
@@ -1401,6 +1402,7 @@ const generateMetadata = () => {
     datasetName: formData.datasetName,
     authorName: formData.authorName,
     publicationType: formData.publicationType,
+    publicationDate: formData.publicationDate, 
     description: formData.description,
     domain: effectiveDomain,
     dataTopic: formData.dataTopic,
@@ -1445,24 +1447,33 @@ const generateMetadata = () => {
   };
 };
 
-  const validateForm = (): boolean => {
-    const newErrors: FormErrors = {};
-    
-    if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
-    if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
-    if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
-    if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
-    if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
-    if (!formData.domain) newErrors.domain = 'Domain is required.';
-    if (formData.domain === 'custom' && !formData.customDomain.trim()) {
-      newErrors.customDomain = 'Custom domain name is required.';
-    }
-    if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
-    if (!formData.loadType) newErrors.loadType = 'Load type is required.';
-
-if (!formData.reviewStatus) newErrors.reviewStatus = 'Review status is required.';
+const validateForm = (): boolean => {
+  const newErrors: FormErrors = {};
   
-  // Only validate these for new_table
+  if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
+  if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
+  if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
+  if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
+  if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
+  if (!formData.domain) newErrors.domain = 'Domain is required.';
+  if (formData.domain === 'custom' && !formData.customDomain.trim()) {
+    newErrors.customDomain = 'Custom domain name is required.';
+  }
+  if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
+  if (!formData.loadType) newErrors.loadType = 'Load type is required.';
+  if (!formData.reviewStatus) newErrors.reviewStatus = 'Review status is required.';
+  
+  if (!formData.publicationDate) {
+    newErrors.publicationDate = 'Publication date is required.';
+  } else {
+    const pubDate = new Date(formData.publicationDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (pubDate > today) {
+      newErrors.publicationDate = 'Publication date cannot be in the future.';
+    }
+  }
+
   if (formData.loadType === 'new_table') {
     if (!formData.tableType) newErrors.tableType = 'Table type is required for new tables.';
     if (!formData.uniqueKey.trim()) newErrors.uniqueKey = 'Unique key is required for new tables.';
@@ -1559,6 +1570,7 @@ const handleSubmit = async (e: FormEvent) => {
         tableType: '',
         uniqueKey: '',
         reviewStatus: '',
+        publicationDate: '',
       });
       setErrors({});
       setGeneratedFilename('');

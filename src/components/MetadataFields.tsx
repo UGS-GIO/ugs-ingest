@@ -1,3 +1,4 @@
+// components/MetadataFields.tsx
 import React from 'react';
 import type { FormData, FormErrors, HandleChangeType } from '../types/uploadTypes';
 import { tableTypeOptions, reviewStatusOptions } from '../types/uploadTypes';
@@ -15,6 +16,9 @@ export const MetadataFields: React.FC<MetadataFieldsProps> = ({
   handleChange,
   unifiedViewName,
 }) => {
+  // Get today's date in YYYY-MM-DD format for max date validation
+  const today = new Date().toISOString().split('T')[0];
+
   return (
     <div className="mb-8">
       <h3 className="text-xl font-semibold text-gray-800 mb-4 border-b border-gray-200 pb-2">
@@ -23,6 +27,28 @@ export const MetadataFields: React.FC<MetadataFieldsProps> = ({
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
+        {/* Publication Date - Always show */}
+        <div>
+          <label htmlFor="publicationDate" className="block text-gray-700 font-semibold mb-2">
+            Publication Date: <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="date"
+            id="publicationDate"
+            name="publicationDate"
+            value={formData.publicationDate}
+            onChange={handleChange}
+            max={today}
+            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+              errors.publicationDate ? 'border-red-500' : 'border-gray-300'
+            }`}
+          />
+          {errors.publicationDate && <p className="text-red-500 text-sm mt-1">{errors.publicationDate}</p>}
+          <p className="text-xs text-gray-500 mt-1">
+            When was this data originally published? (Cannot be in the future)
+          </p>
+        </div>
+
         {/* Table Type - Only for new_table */}
         {formData.loadType === 'new_table' && (
           <div>
