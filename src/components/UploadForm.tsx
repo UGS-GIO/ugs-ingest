@@ -88,6 +88,9 @@ export const UploadForm: React.FC = () => {
   const [generatedFilename, setGeneratedFilename] = useState<string>('');
   const [isProcessingFolders, setIsProcessingFolders] = useState<boolean>(false);
 
+  const [availableDataTopics, setAvailableDataTopics] = useState<string[]>([]);
+  const [isLoadingTopics, setIsLoadingTopics] = useState<boolean>(false);
+
   // ==========================================
   // NEW: Domain-specific PostgREST URL logic
   // ==========================================
@@ -172,6 +175,28 @@ export const UploadForm: React.FC = () => {
 
     generateFilename();
   }, [formData]);
+
+  // Add this useEffect after the existing useEffects
+useEffect(() => {
+  const loadDataTopics = async () => {
+    if (formData.domain && formData.domain !== 'custom') {
+      setIsLoadingTopics(true);
+      try {
+        const topics = await fetchDataTopicsFromDomain(formData.domain);
+        setAvailableDataTopics(topics);
+      } catch (error) {
+        console.error('Failed to load data topics:', error);
+        setAvailableDataTopics([]);
+      } finally {
+        setIsLoadingTopics(false);
+      }
+    } else {
+      setAvailableDataTopics([]);
+    }
+  };
+
+  loadDataTopics();
+}, [formData.domain]);
 
 const [unifiedViewName, setUnifiedViewName] = useState<string>('');
 const [schemaVersion, setSchemaVersion] = useState<string>('v1');
@@ -664,6 +689,65 @@ const checkTableAndSchemaVersion = async (targetTable: string): Promise<string> 
       return [];
     }
   };
+
+  // Add this function in UploadForm.tsx, near the other fetch functions
+const fetchDataTopicsFromDomain = async (domain: string): Promise<string[]> => {
+  try {
+    const schema = getSchemaFromDomain(domain);
+    const POSTGREST_URL = getPostgrestUrl(domain);
+    
+    console.log(`🔍 Fetching data topics from domain: ${domain} (schema: ${schema})`);
+
+    const headers: Record<string, string> = {
+      'Accept-Profile': schema
+    };
+
+    const response = await fetch(`${POSTGREST_URL}/`, { headers });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch API spec: ${response.statusText}`);
+    }
+    
+    const apiSpec = await response.json();
+    const paths = apiSpec.paths || {};
+    
+    // Extract table names and convert to data topics
+    const tableNames = Object.keys(paths)
+      .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
+      .map(path => path.substring(1));
+    
+    // Extract unique data topics from table names
+    // Pattern: domain_dataTopic_* or just dataTopic
+    const topics = new Set<string>();
+    
+    for (const tableName of tableNames) {
+      // Remove domain prefix if it exists
+      let topicName = tableName;
+      
+      // If table starts with domain name, remove it
+      const domainPrefix = `${domain}_`;
+      if (topicName.startsWith(domainPrefix)) {
+        topicName = topicName.substring(domainPrefix.length);
+      }
+      
+      // Get the base topic (first part before any underscore for versioned tables)
+      // Example: geolunits_v1 -> geolunits, qfaults_raw_unified -> qfaults
+      const parts = topicName.split('_');
+      if (parts.length > 0 && !parts[0].startsWith('raw') && parts[0] !== 'unified') {
+        topics.add(parts[0]);
+      }
+    }
+    
+    const sortedTopics = Array.from(topics).sort();
+    console.log(`📋 Found ${sortedTopics.length} data topics in ${domain}:`, sortedTopics);
+    
+    return sortedTopics;
+    
+  } catch (error) {
+    console.error(`Error fetching data topics from domain ${domain}:`, error);
+    return [];
+  }
+};
 
   // ==========================================
   // UPDATED GDAL ANALYSIS FUNCTIONS
@@ -1770,11 +1854,12 @@ const handleSubmit = async (e: FormEvent) => {
           handleChange={handleChange}
         />
 
-        {/* File Naming Convention Section */}
         <NamingConventionForm
           formData={formData}
           errors={errors}
           handleChange={handleChange}
+          availableDataTopics={availableDataTopics}
+          isLoadingTopics={isLoadingTopics}
         />
 
         {/* Correction Fields Section - Only shows for "update" loadType */}
