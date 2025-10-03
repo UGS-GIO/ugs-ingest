@@ -15,7 +15,8 @@ export const SchemaValidationStatus: React.FC<SchemaValidationStatusProps> = ({
   selectedSourceLayer,
   selectedTable,
 }) => {
-  if (loadType === 'full' || loadType === '') {
+  // Only show for "update" load type
+  if (loadType !== 'update') {
     return null;
   }
 

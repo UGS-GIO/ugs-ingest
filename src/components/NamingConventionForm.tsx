@@ -7,12 +7,16 @@ interface NamingConventionFormProps {
   formData: FormData;
   errors: FormErrors;
   handleChange: HandleChangeType;
+  availableDataTopics: string[];
+  isLoadingTopics: boolean;
 }
 
 export const NamingConventionForm: React.FC<NamingConventionFormProps> = ({
   formData,
   errors,
   handleChange,
+  availableDataTopics,
+  isLoadingTopics,
 }) => {
   return (
     <div className="mb-8">
@@ -65,23 +69,87 @@ export const NamingConventionForm: React.FC<NamingConventionFormProps> = ({
           </div>
         )}
 
-        {/* Data Topic */}
+        {/* Data Topic - Dropdown with manual entry option */}
         <div>
           <label htmlFor="dataTopic" className="block text-gray-700 font-semibold mb-2">
             Data Topic: <span className="text-red-500">*</span>
           </label>
-          <input
-            type="text"
-            id="dataTopic"
-            name="dataTopic"
-            value={formData.dataTopic}
-            onChange={handleChange}
-            className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
-              errors.dataTopic ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="e.g., geolunits, alluvial_fan, wetland_inventory"
-          />
+          
+          {formData.domain && formData.domain !== 'custom' && availableDataTopics.length > 0 ? (
+            <>
+              <select
+                id="dataTopicDropdown"
+                name="dataTopic"
+                value={availableDataTopics.includes(formData.dataTopic) ? formData.dataTopic : ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === 'manual') {
+                    // Keep current value or clear if it was a dropdown selection
+                    handleChange({
+                      target: { name: 'dataTopic', value: '' }
+                    } as React.ChangeEvent<HTMLInputElement>);
+                  } else {
+                    handleChange(e);
+                  }
+                }}
+                className={`w-full px-3 py-2 pr-10 border rounded-md text-base bg-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 appearance-none bg-[url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e")] bg-no-repeat bg-[right_0.75rem_center] bg-[length:1em_1em] ${
+                  errors.dataTopic ? 'border-red-500' : 'border-gray-300'
+                }`}
+              >
+                <option value="">Select existing data topic...</option>
+                {availableDataTopics.map((topic) => (
+                  <option key={topic} value={topic}>
+                    {topic}
+                  </option>
+                ))}
+                <option value="manual">--- Enter new data topic manually ---</option>
+              </select>
+              
+              {/* Show manual input if "manual" is selected or if value doesn't match dropdown */}
+              {(!availableDataTopics.includes(formData.dataTopic) || formData.dataTopic === '') && (
+                <input
+                  type="text"
+                  id="dataTopic"
+                  name="dataTopic"
+                  value={formData.dataTopic}
+                  onChange={handleChange}
+                  className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 mt-2 ${
+                    errors.dataTopic ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="Enter new data topic (e.g., geolunits, qfaults)"
+                />
+              )}
+            </>
+          ) : (
+            <input
+              type="text"
+              id="dataTopic"
+              name="dataTopic"
+              value={formData.dataTopic}
+              onChange={handleChange}
+              className={`w-full px-3 py-2 border rounded-md text-base transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 ${
+                errors.dataTopic ? 'border-red-500' : 'border-gray-300'
+              }`}
+              placeholder={isLoadingTopics ? "Loading topics..." : "e.g., geolunits, alluvial_fan, wetland_inventory"}
+              disabled={isLoadingTopics}
+            />
+          )}
+          
+          {isLoadingTopics && (
+            <p className="text-xs text-gray-500 mt-1 flex items-center">
+              <span className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-600 mr-2"></span>
+              Loading existing data topics from {formData.domain}...
+            </p>
+          )}
+          
           {errors.dataTopic && <p className="text-red-500 text-sm mt-1">{errors.dataTopic}</p>}
+          
+          {formData.domain && !isLoadingTopics && availableDataTopics.length > 0 && (
+            <p className="text-xs text-gray-500 mt-1">
+              {availableDataTopics.length} existing topic{availableDataTopics.length !== 1 ? 's' : ''} found. 
+              Select from dropdown or enter a new one.
+            </p>
+          )}
         </div>
 
         {/* Scale */}
