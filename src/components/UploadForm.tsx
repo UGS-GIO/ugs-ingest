@@ -29,6 +29,8 @@ import { LayerSelectionModal } from './LayerSelectionModal';
 import { ManualColumnModal } from './ManualColumnModal';
 import { SchemaMappingModal } from './SchemaMappingModal';
 import { ActionButtons } from './ActionButtons';
+import { CorrectionFields } from './CorrectionFields';
+import { MetadataFields } from './MetadataFields';
 
 declare global {
   interface Window {
@@ -54,6 +56,12 @@ export const UploadForm: React.FC = () => {
     quadName: '',
     pubId: '',
     loadType: '',
+    isCorrection: false,
+    correctionReason: '',
+    tableType: '',
+    uniqueKey: '',
+    reviewStatus: '',
+    publicationDate: '',
   });
 
   // State for schema validation workflow
@@ -80,6 +88,9 @@ export const UploadForm: React.FC = () => {
   const [generatedFilename, setGeneratedFilename] = useState<string>('');
   const [isProcessingFolders, setIsProcessingFolders] = useState<boolean>(false);
 
+  const [availableDataTopics, setAvailableDataTopics] = useState<string[]>([]);
+  const [isLoadingTopics, setIsLoadingTopics] = useState<boolean>(false);
+
   // ==========================================
   // NEW: Domain-specific PostgREST URL logic
   // ==========================================
@@ -98,6 +109,20 @@ export const UploadForm: React.FC = () => {
     // All other domains use the default PostgREST service
     return 'https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app';
   };
+
+  useEffect(() => {
+  if (formData.loadType === 'new_table' && formData.domain && formData.dataTopic) {
+    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+    if (effectiveDomain && formData.dataTopic) {
+      const viewName = `${effectiveDomain}.${formData.dataTopic}.raw.unified`;
+      setUnifiedViewName(viewName);
+    } else {
+      setUnifiedViewName('');
+    }
+  } else {
+    setUnifiedViewName('');
+  }
+}, [formData.loadType, formData.domain, formData.customDomain, formData.dataTopic]);
 
   // Update author name when email is loaded
   useEffect(() => {
@@ -150,6 +175,61 @@ export const UploadForm: React.FC = () => {
 
     generateFilename();
   }, [formData]);
+
+  // Add this useEffect after the existing useEffects
+useEffect(() => {
+  const loadDataTopics = async () => {
+    if (formData.domain && formData.domain !== 'custom') {
+      setIsLoadingTopics(true);
+      try {
+        const topics = await fetchDataTopicsFromDomain(formData.domain);
+        setAvailableDataTopics(topics);
+      } catch (error) {
+        console.error('Failed to load data topics:', error);
+        setAvailableDataTopics([]);
+      } finally {
+        setIsLoadingTopics(false);
+      }
+    } else {
+      setAvailableDataTopics([]);
+    }
+  };
+
+  loadDataTopics();
+}, [formData.domain]);
+
+const [unifiedViewName, setUnifiedViewName] = useState<string>('');
+const [schemaVersion, setSchemaVersion] = useState<string>('v1');
+
+const checkTableAndSchemaVersion = async (targetTable: string): Promise<string> => {
+  try {
+    // For update operations, check if source columns match target table schema
+    if (formData.loadType === 'update' && targetTable && sourceColumns.length > 0) {
+      const [schema, tableName] = targetTable.split('.');
+      const targetTableColumns = await fetchTableSchema(schema, tableName);
+      
+      // Compare source columns with target table schema
+      const targetColumnNames = targetTableColumns.map(col => col.name.toLowerCase());
+      const sourceColumnNames = sourceColumns.map(col => col.toLowerCase());
+      
+      // Check if columns have changed
+      const hasNewColumns = sourceColumnNames.some(col => !targetColumnNames.includes(col));
+      const hasRemovedColumns = targetColumnNames.some(col => !sourceColumnNames.includes(col));
+      
+      if (hasNewColumns || hasRemovedColumns) {
+        // Schema has changed, increment version
+        // In a real implementation, you'd fetch the current version from the database
+        // For now, we'll return v2 if schema changed
+        return 'v2';
+      }
+    }
+    
+    return 'v1'; // Default version for new tables or unchanged schemas
+  } catch (error) {
+    console.error('Error checking schema version:', error);
+    return 'v1';
+  }
+};
 
   // Handle changes for text and select inputs
   const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -610,6 +690,65 @@ export const UploadForm: React.FC = () => {
     }
   };
 
+  // Add this function in UploadForm.tsx, near the other fetch functions
+const fetchDataTopicsFromDomain = async (domain: string): Promise<string[]> => {
+  try {
+    const schema = getSchemaFromDomain(domain);
+    const POSTGREST_URL = getPostgrestUrl(domain);
+    
+    console.log(`🔍 Fetching data topics from domain: ${domain} (schema: ${schema})`);
+
+    const headers: Record<string, string> = {
+      'Accept-Profile': schema
+    };
+
+    const response = await fetch(`${POSTGREST_URL}/`, { headers });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch API spec: ${response.statusText}`);
+    }
+    
+    const apiSpec = await response.json();
+    const paths = apiSpec.paths || {};
+    
+    // Extract table names and convert to data topics
+    const tableNames = Object.keys(paths)
+      .filter(path => path.startsWith('/') && !path.startsWith('/rpc/') && path !== '/')
+      .map(path => path.substring(1));
+    
+    // Extract unique data topics from table names
+    // Pattern: domain_dataTopic_* or just dataTopic
+    const topics = new Set<string>();
+    
+    for (const tableName of tableNames) {
+      // Remove domain prefix if it exists
+      let topicName = tableName;
+      
+      // If table starts with domain name, remove it
+      const domainPrefix = `${domain}_`;
+      if (topicName.startsWith(domainPrefix)) {
+        topicName = topicName.substring(domainPrefix.length);
+      }
+      
+      // Get the base topic (first part before any underscore for versioned tables)
+      // Example: geolunits_v1 -> geolunits, qfaults_raw_unified -> qfaults
+      const parts = topicName.split('_');
+      if (parts.length > 0 && !parts[0].startsWith('raw') && parts[0] !== 'unified') {
+        topics.add(parts[0]);
+      }
+    }
+    
+    const sortedTopics = Array.from(topics).sort();
+    console.log(`📋 Found ${sortedTopics.length} data topics in ${domain}:`, sortedTopics);
+    
+    return sortedTopics;
+    
+  } catch (error) {
+    console.error(`Error fetching data topics from domain ${domain}:`, error);
+    return [];
+  }
+};
+
   // ==========================================
   // UPDATED GDAL ANALYSIS FUNCTIONS
   // ==========================================
@@ -820,61 +959,258 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[], gdalResult?: GDALAnalysisResult | null }> => {
-    const allColumns = new Set<string>();
-
-    const hasGDB = files.some(f => f.name.includes('.gdb/'));
+  const analyzeShapefileWithGDAL = async (files: File[]): Promise<{ layers: LayerInfo[], columns: string[], gdalResult: GDALAnalysisResult | null }> => {
+  try {
+    console.log('🔍 Using GDAL microservice to analyze shapefile...');
     
-    if (hasGDB) {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    
+    // Find all shapefile components (.shp, .shx, .dbf, .prj, etc.)
+    const shpFiles = files.filter(f => {
+      const ext = f.name.toLowerCase().split('.').pop();
+      return ['shp', 'shx', 'dbf', 'prj', 'cpg', 'sbn', 'sbx'].includes(ext || '');
+    });
+    
+    if (shpFiles.length === 0) {
+      console.log('No shapefile components found');
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+    // Get the base name (without extension)
+    const shpBaseName = shpFiles.find(f => f.name.toLowerCase().endsWith('.shp'))?.name.replace('.shp', '') || 'shapefile';
+    console.log(`📁 Processing shapefile: ${shpBaseName}`);
+    
+    // Add all shapefile components to zip
+    for (const file of shpFiles) {
+      zip.file(file.name, file);
+    }
+    
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const tempFilename = `temp-analysis-${Date.now()}-${shpBaseName}.zip`;
+    
+    console.log(`📦 Created analysis zip: ${tempFilename} (${(zipBlob.size / 1024 / 1024).toFixed(2)}MB)`);
+
+    // Use direct or cloud storage method based on size
+    const MAX_DIRECT_SIZE = 50 * 1024 * 1024;
+    
+    let result;
+    if (zipBlob.size > MAX_DIRECT_SIZE) {
+      console.log(`⚠️ File too large for direct upload, using Cloud Storage staging...`);
+      const uploaded = await uploadZipToGCS(zipBlob, tempFilename);
+      if (!uploaded) {
+        throw new Error('Failed to upload file to Cloud Storage for analysis');
+      }
+      
+      const analysisResponse = await fetch('/api/gdal-proxy/analyze-from-storage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: 'stagedzips',
+          filename: tempFilename,
+          command: 'ogrinfo',
+          args: ['-json', '-al', `/vsizip/${tempFilename}/${shpBaseName}.shp`]
+        })
+      });
+      
+      if (!analysisResponse.ok) {
+        throw new Error(`GDAL analysis failed: ${analysisResponse.status}`);
+      }
+      
+      result = await analysisResponse.json();
+      
+      // Cleanup
       try {
-        const { layers, columns, gdalResult } = await analyzeGdbColumnsWithGDAL(files);
+        await fetch('/api/gdal-proxy/cleanup-temp-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bucket: 'stagedzips', filename: tempFilename })
+        });
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temp file:', cleanupError);
+      }
+    } else {
+      console.log(`✅ File size OK for direct upload, using direct method...`);
+      const formData = new FormData();
+      formData.append('file', new File([zipBlob], tempFilename));
+      formData.append('command', 'ogrinfo');
+      formData.append('args', JSON.stringify(['-json', '-al', `/vsizip/${tempFilename}/${shpBaseName}.shp`]));
+      
+      const response = await fetch('/api/gdal-proxy/upload-and-execute', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        throw new Error(`GDAL service returned ${response.status}`);
+      }
+      
+      result = await response.json();
+    }
+    
+    // Process the result
+    if (!result.success || !result.stdout) {
+      console.error('Failed to analyze shapefile:', result.stderr);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+    const layersWithFields: LayerInfo[] = [];
+    
+    try {
+      const shpInfo = JSON.parse(result.stdout);
+      const layers = shpInfo.layers || [];
+      
+      console.log(`Found ${layers.length} layers in shapefile`);
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const layer of layers) {
+        const layerFields = new Set<string>();
         
-        if (layers.length > 1) {
-          setSourceLayerInfo(layers);
-          setGdalAnalysisResult(gdalResult);
-          return { 
-            needsLayerSelection: true, 
-            columns: [], 
-            layers,
-            gdalResult
-          };
-        } else if (layers.length === 1) {
-          columns.forEach(col => allColumns.add(col));
-          setGdalAnalysisResult(gdalResult);
-          if (columns.length > 0) {
-            return { 
-              needsLayerSelection: false, 
-              columns: Array.from(allColumns),
-              gdalResult
-            };
+        const fields = layer.fields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const field of fields) {
+          if (field.name) {
+            layerFields.add(field.name);
           }
         }
-      } catch (error) {
-        console.error('Failed to analyze GDB with GDAL service:', error);
-      }
-    }
-
-    for (const file of files) {
-      try {
-        if (file.name.toLowerCase().endsWith('.csv')) {
-          const columns = await analyzeCsvColumns(file);
-          columns.forEach(col => allColumns.add(col));
-        } else if (file.name.toLowerCase().endsWith('.dbf')) {
-          console.log('DBF file detected:', file.name);
-          const columns = await analyzeDbfColumns(file);
-          columns.forEach(col => allColumns.add(col));
+        
+        const geometryFields = layer.geometryFields || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const geomField of geometryFields) {
+          if (geomField.name) {
+            layerFields.add(geomField.name);
+          }
         }
-      } catch (error) {
-        console.error('Error analyzing file:', file.name, error);
+        
+        layersWithFields.push({
+          name: layer.name,
+          fields: Array.from(layerFields),
+          featureCount: layer.featureCount || 'Unknown',
+          geometryType: layer.geometryFields?.[0]?.type || 'Unknown'
+        });
+        
+        console.log(`Layer "${layer.name}": ${layerFields.size} fields, ${layer.featureCount || '?'} features`);
       }
-    }
 
-    return { 
-      needsLayerSelection: false, 
-      columns: Array.from(allColumns),
-      gdalResult: null
-    };
+      const gdalResult: GDALAnalysisResult = {
+        layers: layersWithFields,
+        totalLayers: layersWithFields.length,
+        analysisTimestamp: new Date().toISOString(),
+        // Add CRS and other metadata from the shapefile
+        crs: shpInfo.layers?.[0]?.geometryFields?.[0]?.coordinateSystem,
+        extent: shpInfo.layers?.[0]?.geometryFields?.[0]?.extent
+      };
+
+      if (layersWithFields.length === 1) {
+        console.log(`✅ Single layer found: ${layersWithFields[0].name}`);
+        const resultWithSelection: GDALAnalysisResult = {
+          ...gdalResult,
+          selectedLayer: layersWithFields[0]
+        };
+        
+        return { 
+          layers: layersWithFields, 
+          columns: layersWithFields[0].fields,
+          gdalResult: resultWithSelection
+        };
+      }
+      
+      return { 
+        layers: layersWithFields, 
+        columns: layersWithFields[0]?.fields || [],
+        gdalResult: gdalResult
+      };
+      
+    } catch (e) {
+      console.error('Failed to parse shapefile analysis JSON:', e);
+      return { layers: [], columns: [], gdalResult: null };
+    }
+    
+  } catch (error) {
+    console.error('Error using GDAL microservice for shapefile:', error);
+    return { layers: [], columns: [], gdalResult: null };
+  }
+};
+
+const analyzeFileColumns = async (files: File[]): Promise<{ needsLayerSelection: boolean, columns: string[], layers?: LayerInfo[], gdalResult?: GDALAnalysisResult | null }> => {
+  const allColumns = new Set<string>();
+
+  // Check for geodatabase
+  const hasGDB = files.some(f => f.name.includes('.gdb/'));
+  
+  if (hasGDB) {
+    try {
+      const { layers, columns, gdalResult } = await analyzeGdbColumnsWithGDAL(files);
+      
+      if (layers.length > 1) {
+        setSourceLayerInfo(layers);
+        setGdalAnalysisResult(gdalResult);
+        return { 
+          needsLayerSelection: true, 
+          columns: [], 
+          layers,
+          gdalResult
+        };
+      } else if (layers.length === 1) {
+        columns.forEach(col => allColumns.add(col));
+        setGdalAnalysisResult(gdalResult);
+        if (columns.length > 0) {
+          return { 
+            needsLayerSelection: false, 
+            columns: Array.from(allColumns),
+            gdalResult
+          };
+        }
+      }
+    } catch (error) {
+      console.error('Failed to analyze GDB with GDAL service:', error);
+    }
+  }
+
+  // NEW: Check for shapefiles and use GDAL analysis
+  const hasShapefile = files.some(f => f.name.toLowerCase().endsWith('.shp'));
+  
+  if (hasShapefile) {
+    try {
+      const { columns, gdalResult } = await analyzeShapefileWithGDAL(files);
+      
+      if (columns.length > 0) {
+        columns.forEach(col => allColumns.add(col));
+        setGdalAnalysisResult(gdalResult);
+        return { 
+          needsLayerSelection: false, 
+          columns: Array.from(allColumns),
+          gdalResult
+        };
+      }
+    } catch (error) {
+      console.error('Failed to analyze shapefile with GDAL service:', error);
+      // Fall back to DBF analysis if GDAL fails
+    }
+  }
+
+  // Fallback: Process other file types (CSV, DBF without shapefile)
+  for (const file of files) {
+    try {
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        const columns = await analyzeCsvColumns(file);
+        columns.forEach(col => allColumns.add(col));
+      } else if (file.name.toLowerCase().endsWith('.dbf') && !hasShapefile) {
+        console.log('DBF file detected (no shapefile):', file.name);
+        const columns = await analyzeDbfColumns(file);
+        columns.forEach(col => allColumns.add(col));
+      }
+    } catch (error) {
+      console.error('Error analyzing file:', file.name, error);
+    }
+  }
+
+  return { 
+    needsLayerSelection: false, 
+    columns: Array.from(allColumns),
+    gdalResult: null
   };
+};
 
   const analyzeDbfColumns = async (file: File): Promise<string[]> => {
     try {
@@ -1095,10 +1431,14 @@ export const UploadForm: React.FC = () => {
   const handleTableSelection = async (tableFullName: string) => {
     setSelectedTable(tableFullName);
     
-    if (tableFullName) {
-      const [schema, tableName] = tableFullName.split('.');
-      const columns = await fetchTableSchema(schema, tableName);
-      setTargetColumns(columns);
+  if (tableFullName) {
+    const [schema, tableName] = tableFullName.split('.');
+    const columns = await fetchTableSchema(schema, tableName);
+    setTargetColumns(columns);
+    
+    // Check schema version
+    const version = await checkTableAndSchemaVersion(tableFullName);
+    setSchemaVersion(version);
       
       const newMapping: {[key: string]: string} = {};
       sourceColumns.forEach(sourceCol => {
@@ -1121,14 +1461,15 @@ export const UploadForm: React.FC = () => {
     }
   };
 
-  const isColumnMappingComplete = (): boolean => {
-    if (formData.loadType === 'full') return true;
-    if (schemaValidationState !== 'mapping' && schemaValidationState !== 'completed') return false;
-    if (sourceColumns.length === 0) return false;
-    if (!selectedTable) return false;
-    
-    return sourceColumns.every(col => columnMapping[col]);
-  };
+const isColumnMappingComplete = (): boolean => {
+  // Changed from 'full' to 'new_table'
+  if (formData.loadType === 'new_table') return true;
+  if (schemaValidationState !== 'mapping' && schemaValidationState !== 'completed') return false;
+  if (sourceColumns.length === 0) return false;
+  if (!selectedTable) return false;
+  
+  return sourceColumns.every(col => columnMapping[col]);
+};
 
   useEffect(() => {
     if (schemaValidationState === 'mapping' && isColumnMappingComplete()) {
@@ -1137,69 +1478,99 @@ export const UploadForm: React.FC = () => {
     }
   }, [columnMapping, sourceColumns, selectedTable, schemaValidationState]);
 
-  const generateMetadata = () => {
-    const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
-    
-    return {
-      projectName: formData.projectName,
-      datasetName: formData.datasetName,
-      authorName: formData.authorName,
-      publicationType: formData.publicationType,
-      description: formData.description,
-      domain: effectiveDomain,
-      dataTopic: formData.dataTopic,
-      scale: formData.scale || null,
-      quadName: formData.quadName || null,
-      pubId: formData.pubId || null,
-      loadType: formData.loadType,
-      submittedBy: email,
-      submittedAt: new Date().toISOString(),
-      originalFiles: formData.selectedFiles.map(file => ({
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified
-      })),
-      totalFileCount: formData.selectedFiles.length,
-      totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
-      zipFilename: generatedFilename,
-      schemaValidation: formData.loadType !== 'full' ? {
-        validationState: schemaValidationState,
-        targetTable: selectedTable,
-        sourceLayer: selectedSourceLayer,
-        sourceColumns: sourceColumns,
-        columnMapping: columnMapping,
-        validationCompleted: schemaValidationState === 'completed',
-        gdalAnalysis: gdalAnalysisResult,
-        mappingTimestamp: new Date().toISOString(),
-        postgreRestUrl: getPostgrestUrl(formData.domain) // Include which URL was used
-      } : null,
-      containsGeodatabase: formData.selectedFiles.some(file => 
-        file.name.includes('.gdb/') || file.name.endsWith('.gdb')
-      ),
-      userAgent: navigator.userAgent,
-      uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Schema Validation with Domain-Specific PostgREST URLs)',
-    };
+const generateMetadata = () => {
+  const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
+  
+  return {
+    projectName: formData.projectName,
+    datasetName: formData.datasetName,
+    authorName: formData.authorName,
+    publicationType: formData.publicationType,
+    publicationDate: formData.publicationDate, 
+    description: formData.description,
+    domain: effectiveDomain,
+    dataTopic: formData.dataTopic,
+    scale: formData.scale || null,
+    quadName: formData.quadName || null,
+    pubId: formData.pubId || null,
+    loadType: formData.loadType,
+    isCorrection: formData.isCorrection,
+    correctionReason: formData.isCorrection ? formData.correctionReason : null,
+    schema_version: schemaVersion,
+    table_type: formData.loadType === 'new_table' ? formData.tableType : null,
+    unique_key: formData.loadType === 'new_table' ? formData.uniqueKey : null,
+    review_status: formData.reviewStatus,
+    unified_view_name: formData.loadType === 'new_table' ? unifiedViewName : null,
+    submittedBy: email,
+    submittedAt: new Date().toISOString(),
+    originalFiles: formData.selectedFiles.map(file => ({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified
+    })),
+    totalFileCount: formData.selectedFiles.length,
+    totalFileSize: formData.selectedFiles.reduce((total, file) => total + file.size, 0),
+    zipFilename: generatedFilename,
+    schemaValidation: formData.loadType === 'update' ? {
+      validationState: schemaValidationState,
+      targetTable: selectedTable,
+      sourceLayer: selectedSourceLayer,
+      sourceColumns: sourceColumns,
+      columnMapping: columnMapping,
+      validationCompleted: schemaValidationState === 'completed',
+      gdalAnalysis: gdalAnalysisResult,
+      mappingTimestamp: new Date().toISOString(),
+      postgreRestUrl: getPostgrestUrl(formData.domain)
+    } : null,
+    containsGeodatabase: formData.selectedFiles.some(file => 
+      file.name.includes('.gdb/') || file.name.endsWith('.gdb')
+    ),
+    userAgent: navigator.userAgent,
+    uploadSource: 'UGS Ingest Web Application v2.1 (Enhanced Schema Validation with Domain-Specific PostgREST URLs)',
   };
+};
 
-  const validateForm = (): boolean => {
-    const newErrors: FormErrors = {};
-    
-    if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
-    if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
-    if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
-    if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
-    if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
-    if (!formData.domain) newErrors.domain = 'Domain is required.';
-    if (formData.domain === 'custom' && !formData.customDomain.trim()) {
-      newErrors.customDomain = 'Custom domain name is required.';
+const validateForm = (): boolean => {
+  const newErrors: FormErrors = {};
+  
+  if (!formData.projectName.trim()) newErrors.projectName = 'Project name is required.';
+  if (!formData.datasetName.trim()) newErrors.datasetName = 'Dataset name is required.';
+  if (!formData.authorName.trim()) newErrors.authorName = 'Author name is required.';
+  if (!formData.publicationType) newErrors.publicationType = 'Publication type is required.';
+  if (!formData.selectedFiles || formData.selectedFiles.length === 0) newErrors.selectedFiles = 'Please select or drop at least one file to upload.';
+  if (!formData.domain) newErrors.domain = 'Domain is required.';
+  if (formData.domain === 'custom' && !formData.customDomain.trim()) {
+    newErrors.customDomain = 'Custom domain name is required.';
+  }
+  if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
+  if (!formData.loadType) newErrors.loadType = 'Load type is required.';
+  if (!formData.reviewStatus) newErrors.reviewStatus = 'Review status is required.';
+  
+  if (!formData.publicationDate) {
+    newErrors.publicationDate = 'Publication date is required.';
+  } else {
+    const pubDate = new Date(formData.publicationDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (pubDate > today) {
+      newErrors.publicationDate = 'Publication date cannot be in the future.';
     }
-    if (!formData.dataTopic.trim()) newErrors.dataTopic = 'Data topic is required.';
-    if (!formData.loadType) newErrors.loadType = 'Load type is required.';
+  }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+  if (formData.loadType === 'new_table') {
+    if (!formData.tableType) newErrors.tableType = 'Table type is required for new tables.';
+    if (!formData.uniqueKey.trim()) newErrors.uniqueKey = 'Unique key is required for new tables.';
+  }
+  
+  if (formData.loadType === 'update' && formData.isCorrection && !formData.correctionReason.trim()) {
+    newErrors.correctionReason = 'Correction reason is required when marking as a data correction.';
+  }
+
+  setErrors(newErrors);
+  return Object.keys(newErrors).length === 0;
+};
+
 
   const createZipFile = async (): Promise<Blob> => {
     const JSZip = (await import('jszip')).default;
@@ -1223,21 +1594,22 @@ export const UploadForm: React.FC = () => {
     });
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setUploadMessage('');
+const handleSubmit = async (e: FormEvent) => {
+  e.preventDefault();
+  setUploadMessage('');
 
-    if (!validateForm()) {
-      setUploadMessage('Please correct the errors in the form.');
-      return;
-    }
+  if (!validateForm()) {
+    setUploadMessage('Please correct the errors in the form.');
+    return;
+  }
 
-    if (formData.loadType !== 'full' && schemaValidationState !== 'completed') {
-      setUploadMessage('Please complete schema validation before uploading.');
-      return;
-    }
+  // Changed from !== 'full' to === 'update'
+  if (formData.loadType === 'update' && schemaValidationState !== 'completed') {
+    setUploadMessage('Please complete schema validation before uploading.');
+    return;
+  }
 
-    setIsSubmitting(true);
+  setIsSubmitting(true);
 
     try {
       // Step 1: Create zip file
@@ -1277,6 +1649,12 @@ export const UploadForm: React.FC = () => {
         quadName: '',
         pubId: '',
         loadType: '',
+        isCorrection: false,
+        correctionReason: '',
+        tableType: '',
+        uniqueKey: '',
+        reviewStatus: '',
+        publicationDate: '',
       });
       setErrors({});
       setGeneratedFilename('');
@@ -1319,6 +1697,21 @@ export const UploadForm: React.FC = () => {
     setManualColumnInput('');
     setSchemaValidationState('not_started');
   };
+
+  const handleCorrectionToggle = (checked: boolean) => {
+  setFormData(prev => ({
+    ...prev,
+    isCorrection: checked,
+    // Clear correction reason if unchecked
+    correctionReason: checked ? prev.correctionReason : '',
+  }));
+  
+  // Clear any correction reason error when unchecking
+  if (!checked && errors.correctionReason) {
+    setErrors(prev => ({ ...prev, correctionReason: undefined }));
+  }
+};
+
 
   // Loading state
   if (loading) {
@@ -1461,26 +1854,44 @@ export const UploadForm: React.FC = () => {
           handleChange={handleChange}
         />
 
-        {/* File Naming Convention Section */}
         <NamingConventionForm
           formData={formData}
           errors={errors}
           handleChange={handleChange}
+          availableDataTopics={availableDataTopics}
+          isLoadingTopics={isLoadingTopics}
         />
 
-        {/* File Upload Section */}
-        <FileUploadSection
+        {/* Correction Fields Section - Only shows for "update" loadType */}
+        <CorrectionFields
           formData={formData}
           errors={errors}
-          isDragging={isDragging}
-          isProcessingFolders={isProcessingFolders}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onFileOrFolderSelect={handleFileOrFolderSelect}
-          onFileChange={handleFileChange}
-          onRemoveFile={removeFile}
+          handleChange={handleChange}
+          onCorrectionToggle={handleCorrectionToggle}
         />
+
+        {/* Metadata Fields Section */}
+<MetadataFields
+  formData={formData}
+  errors={errors}
+  handleChange={handleChange}
+  unifiedViewName={unifiedViewName}
+/>
+
+
+{/* File Upload Section */}
+<FileUploadSection
+  formData={formData}
+  errors={errors}
+  isDragging={isDragging}
+  isProcessingFolders={isProcessingFolders}
+  onDragOver={handleDragOver}
+  onDragLeave={handleDragLeave}
+  onDrop={handleDrop}
+  onFileOrFolderSelect={handleFileOrFolderSelect}
+  onFileChange={handleFileChange}
+  onRemoveFile={removeFile}
+/>
 
         {/* Action Buttons */}
         <ActionButtons
