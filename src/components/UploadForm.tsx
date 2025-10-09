@@ -114,7 +114,7 @@ export const UploadForm: React.FC = () => {
   if (formData.loadType === 'new_table' && formData.domain && formData.dataTopic) {
     const effectiveDomain = formData.domain === 'custom' ? formData.customDomain : formData.domain;
     if (effectiveDomain && formData.dataTopic) {
-      const viewName = `${effectiveDomain}.${formData.dataTopic}.raw.unified`;
+      const viewName = `${effectiveDomain}_${formData.dataTopic}_raw_unified`;
       setUnifiedViewName(viewName);
     } else {
       setUnifiedViewName('');
